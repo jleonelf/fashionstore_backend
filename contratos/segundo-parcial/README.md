@@ -10,6 +10,8 @@
 - [backend.md](backend.md): invariantes, transacciones, permisos y servicios.
 - [integracion.md](integracion.md): flujos y contratos funcionales para todos los módulos.
 - [payloads.md](payloads.md): ejemplos de solicitudes y respuestas para que los clientes puedan preparar consumidores y dobles de prueba.
+- [trazabilidad-cu.md](trazabilidad-cu.md): impacto de CU01–CU25 y alcance de CU26–CU37.
+- [flujo-trabajo.md](flujo-trabajo.md): entregas, PRs, responsables y puertas de integración entre repositorios.
 
 Los clientes llevan una copia **idéntica** de `interfaz.json`, los dos esquemas y `compartido.md` en `contratos/segundo-parcial` de sus propios repositorios. Cada clon se puede revisar sin el monorepositorio de documentación académica. Los hashes SHA-256 de los tres JSON se anotan en [version.json](version.json); cualquier diferencia entre repositorios detiene la integración.
 
