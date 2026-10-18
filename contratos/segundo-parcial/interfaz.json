@@ -40,6 +40,9 @@
     "codigos": ["OK", "SIN_STOCK", "PRECIO_CAMBIADO", "SOLICITUD_VENCIDA", "TIEMPO_INCOHERENTE", "PLAN_NO_HABILITADO", "CUPO_INSUFICIENTE", "TASA_NO_VIGENTE", "OPERACION_MODIFICADA", "PAGO_EN_VERIFICACION"]
   },
   "rutas_nuevas_propuestas": [
+    {"metodo": "POST", "ruta": "/empresas", "cuerpo": "alta de empresa; superadministrador", "respuesta": "empresa creada y plan asignado"},
+    {"metodo": "POST", "ruta": "/empresas/{empresa_id}/suscripciones", "cuerpo": "plan, fechas manuales y motivo; superadministrador", "respuesta": "suscripcion versionada"},
+    {"metodo": "GET", "ruta": "/empresas/mi-plan", "respuesta": "plan, vigencia, gracia y capacidad efectiva"},
     {"metodo": "GET", "ruta": "/catalogo/descarga", "respuesta": "catalogo publico versionado y fecha de descarga"},
     {"metodo": "GET", "ruta": "/sincronizacion/referencia-horaria", "respuesta": "hora, referencia y vencimiento emitidos por servidor"},
     {"metodo": "POST", "ruta": "/sincronizacion/operaciones", "cuerpo": "operacion", "respuesta": "resultado", "semantica": "una operacion y transaccion por solicitud; 200 incluso ante rechazo comercial"},
@@ -49,9 +52,18 @@
     {"metodo": "POST", "ruta": "/notificaciones/suscripciones", "cuerpo": "canal FCM o WEB_PUSH y credencial de dispositivo; Idempotency-Key", "respuesta": "suscripcion_id y estado"},
     {"metodo": "DELETE", "ruta": "/notificaciones/suscripciones/{suscripcion_id}", "respuesta": "204 tras desvincular del usuario actual"},
     {"metodo": "GET", "ruta": "/saldos/mio", "respuesta": "saldo BOB propio y movimientos"},
+    {"metodo": "POST", "ruta": "/ventas/{venta_id}/aplicar-saldo", "cuerpo": "importe_bob, revision; Idempotency-Key", "respuesta": "saldo reservado/usado y restante"},
+    {"metodo": "POST", "ruta": "/cambios", "cuerpo": "venta, unidades devueltas, reemplazos y sucursal; Idempotency-Key", "respuesta": "cambio valorado y diferencia"},
+    {"metodo": "POST", "ruta": "/cambios/{cambio_id}/confirmar", "cuerpo": "revision, importe aceptado y pago; Idempotency-Key", "respuesta": "cambio confirmado o pendiente de pago"},
+    {"metodo": "POST", "ruta": "/plataforma/tasas-cambio", "cuerpo": "BOB por USD, vigencia y motivo; superadministrador", "respuesta": "tasa versionada"},
     {"metodo": "POST", "ruta": "/cajas/turnos", "cuerpo": "caja_id, sucursal_id, cupos por variante; Idempotency-Key", "respuesta": "habilitacion, ventana de 8 h, cupos y precios versionados"},
     {"metodo": "POST", "ruta": "/cajas/turnos/{turno_id}/cerrar", "cuerpo": "revision y operaciones sincronizadas; Idempotency-Key", "respuesta": "cierre y cupo liberado"},
-    {"metodo": "POST", "ruta": "/cajas/turnos/{turno_id}/recuperar", "cuerpo": "conteo fisico por variante, motivo y evidencia; Idempotency-Key", "respuesta": "ajuste auditado y cierre supervisado"}
+    {"metodo": "POST", "ruta": "/cajas/turnos/{turno_id}/recuperar", "cuerpo": "conteo fisico por variante, motivo y evidencia; Idempotency-Key", "respuesta": "ajuste auditado y cierre supervisado"},
+    {"metodo": "POST", "ruta": "/reportes/interpretar", "cuerpo": "texto o voz transcrita", "respuesta": "tipo y filtros propuestos, sujetos a validacion backend"},
+    {"metodo": "POST", "ruta": "/reportes/consultar", "cuerpo": "tipo y filtros permitidos", "respuesta": "tabla, totales y metadatos tipados"},
+    {"metodo": "POST", "ruta": "/reportes/exportar", "cuerpo": "misma consulta y formato excel, csv o pdf", "respuesta": "archivo de los mismos datos"},
+    {"metodo": "GET", "ruta": "/analitica/pronosticos", "respuesta": "pronostico semanal, version y metricas; solo Profesional"},
+    {"metodo": "GET", "ruta": "/analitica/grupos-productos", "respuesta": "grupos de productos, version y metricas; solo Profesional"}
   ],
   "rutas_existentes_a_extender": [
     "POST /sesion",

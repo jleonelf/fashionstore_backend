@@ -3,7 +3,7 @@
     "version":  "0.1.0",
     "estado":  "propuesta-para-revision",
     "sha256":  {
-                   "interfaz.json":  "a11ed74661afb1e4bb1928d41c93514b10576e4cb5c691c3208ab67ffefc68ec",
+                   "interfaz.json":  "ad46deef36845aaf771d0d59bd3aa2d19738c3ce26f155a5af4bb5c983353425",
                    "operacion.schema.json":  "7c51e198acdad165dc503cf5859234dd30ff634966217adfc74af3460e2df8e7",
                    "resultado.schema.json":  "62a2f503b592e0c7ea79db3b659ec230d7dadbec463fe6ef43e81a912dc0a3fd"
                }
