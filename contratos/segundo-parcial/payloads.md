@@ -1,6 +1,6 @@
 # Payloads de integración propuestos
 
-Versión 0.1.0. Son ejemplos normativos de **forma y significado**, con UUID/fechas/importes ilustrativos. No prueban que la ruta exista. Los campos de identidad en el cuerpo se contrastan con sesión, empresa y rol. Salvo indicación, cada escritura usa `Idempotency-Key` UUID, y un reintento idéntico conserva efecto y respuesta. Las operaciones de sincronización usan su `operacion_id` como clave estable.
+Versión 0.1.1. Son ejemplos normativos de **forma y significado**, con UUID/fechas/importes ilustrativos. No prueban que la ruta exista. Los campos de identidad en el cuerpo se contrastan con sesión, empresa y rol. Salvo indicación, cada escritura usa `Idempotency-Key` UUID, y un reintento idéntico conserva efecto y respuesta. Las operaciones de sincronización usan su `operacion_id` como clave estable.
 
 ## Reserva diferida
 

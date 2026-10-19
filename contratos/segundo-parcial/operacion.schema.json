@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://fashionstore.local/contratos/segundo-parcial/0.1.0/operacion.schema.json",
+  "$id": "https://fashionstore.local/contratos/segundo-parcial/0.1.1/operacion.schema.json",
   "title": "Operación de sincronización FashionStore",
   "type": "object",
   "required": ["version_esquema", "operacion_id", "tipo", "creada_local_en", "empresa_id", "usuario_id", "dispositivo_id", "secuencia_local", "datos"],

@@ -2,6 +2,12 @@
 
 **Estado:** diseño previo a migraciones y endpoints. Comparte comandos/estados con [compartido.md](compartido.md). Las firmas de ejemplo son nombres **nuevos en español**; deben verificarse contra servicios actuales para reutilizar comportamiento y no romper APIs públicas.
 
+## Ubicación de la implementación
+
+[paquetes-cu.md](paquetes-cu.md) fija la carpeta dueña de CU26–CU37 y de las adaptaciones de CU01–CU25. Los modelos, DTO, repositorios, servicios y routers nuevos se agregan al paquete `app/core/modules/<paquete>/` correspondiente; se amplían los archivos existentes cuando la entidad o el servicio ya existe. `caja_offline` es el único paquete backend nuevo previsto. `app/api/v1/api.py` monta los routers y puede montar un adaptador común de sincronización, pero la validación y transacción de cada operación pertenecen a `reservas_traslados`, `ventas_pagos` o `caja_offline`.
+
+`app/core/` conserva infraestructura transversal y `app/db/modelos.py` registra los modelos para Alembic. No recrear `app/models/`, `app/repositories/`, `app/schemas/`, `app/services/` ni `app/api/v1/endpoints/`. Una migración vive en `alembic/versions/`, no dentro de un paquete. Las integraciones Decart y Stripe existentes ya están bajo sus paquetes dueños; el proveedor IA compartido está en `app/core/integraciones/`.
+
 ## Autorización y planes
 
 - Empresa se resuelve de la identidad validada; superadministración es un ámbito separado. Misma dirección de correo puede registrarse en dos empresas, pero el login identifica cuál. Consultas, escrituras, webhooks, tareas, reportes, reintentos y recursos por ID verifican tenant antes de devolver datos.
@@ -39,7 +45,7 @@
 | Pagos/cambios | `obtener_tasa_vigente`, `convertir_bob_a_usd`, `reconciliar_pago`, `registrar_cambio`, `reservar_saldo`, `consumir_saldo` |
 | Reportes/ML | `interpretar_solicitud_reporte`, `validar_filtros_reporte`, `ejecutar_reporte`, `entrenar_pronostico`, `evaluar_pronostico`, `agrupar_productos`, `consultar_analitica` |
 
-Estos nombres son contratos de intención, no afirmación de que hoy existan. Al modificar servicios de reservas, ventas, pagos o devoluciones se debe aplicar el skill de Ciclo 2 y su puerta transaccional previa a integrar frontend. Mantener las firmas existentes que sean públicas y colocar la lógica común en servicios reutilizables.
+Estos nombres son contratos de intención, no afirmación de que hoy existan. Al modificar reservas, ventas, pagos o devoluciones se conservan las reglas de bloqueo de inventario, transacción única por operación, estados por línea, idempotencia y recuperación descritas arriba y en [integracion.md](integracion.md); se comprueba ese comportamiento antes de integrar frontend. Mantener las firmas existentes que sean públicas y colocar la lógica común en servicios reutilizables.
 
 ## Reportes, ML e integraciones
 

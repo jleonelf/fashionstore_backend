@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://fashionstore.local/contratos/segundo-parcial/0.1.0/resultado.schema.json",
+  "$id": "https://fashionstore.local/contratos/segundo-parcial/0.1.1/resultado.schema.json",
   "title": "Resultado durable de sincronización FashionStore",
   "type": "object",
   "required": ["operacion_id", "estado", "codigo", "recibida_en", "detalle"],

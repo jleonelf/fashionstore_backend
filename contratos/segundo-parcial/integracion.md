@@ -1,13 +1,13 @@
 # Integración funcional — segundo parcial
 
-Versión 0.1.0 de **diseño para revisión**. Las rutas de esta tabla son propuestas salvo las marcadas «existente»; FastAPI deberá publicar el OpenAPI real antes de integrarlas. Todas usan `/api/v1`, sesión validada y empresa resuelta en el servidor. Un `empresa_id` recibido se contrasta con la sesión y nunca concede acceso. Respuestas de error propuestas: `{ "codigo": "...", "detalle": "..." }`, sin datos de otro tenant. Importes BOB/USD son cadenas decimales de dos posiciones; tasa BOB por USD es decimal positivo versionado. Fechas ISO 8601 con zona.
+Versión 0.1.1 de **diseño para revisión**. Las rutas de esta tabla son propuestas salvo las marcadas «existente»; FastAPI deberá publicar el OpenAPI real antes de integrarlas. Todas usan `/api/v1`, sesión validada y empresa resuelta en el servidor. Un `empresa_id` recibido se contrasta con la sesión y nunca concede acceso. Respuestas de error propuestas: `{ "codigo": "...", "detalle": "..." }`, sin datos de otro tenant. Importes BOB/USD son cadenas decimales de dos posiciones; tasa BOB por USD es decimal positivo versionado. Fechas ISO 8601 con zona.
 
 ## Identidad, empresa y plan
 
 | Operación | Petición mínima | Respuesta/regla |
 |---|---|---|
 | `POST /sesion` (existente, a ampliar) | `correo_electronico`, `contrasenia` y `empresa_codigo` opcional; este último se exige cuando la identidad pertenece a varias empresas | Sesión ligada a una empresa; nunca elegirla con un encabezado mutable posterior. El login antiguo sigue válido si hay una sola pertenencia. |
-| `POST /empresas` | Nombre y datos de alta; superadministrador | Empresa y plan asignado administrativamente; no hay cobro SaaS. |
+| `POST /empresas` | Nombre y datos de alta; superadministrador | Empresa y administrador inicial creados; plan pendiente hasta asignación administrativa, sin cobro SaaS. |
 | `POST /empresas/{id}/suscripciones` | Plan, inicio y fin manuales; motivo; superadministrador | Historial de vigencias, 72 h de gracia. Básico 2 sucursales activas; Profesional 10. Reducción rechazada hasta quedar dentro del límite sin borrar datos. |
 | `GET /empresas/mi-plan` | Sesión | Plan, capacidad, vencimiento y gracia para mostrar capacidad efectiva. |
 

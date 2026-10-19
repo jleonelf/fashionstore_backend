@@ -1,6 +1,6 @@
 {
   "nombre": "fashionstore-segundo-parcial",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "estado": "propuesta-para-revision",
   "base": "/api/v1",
   "formato": {
@@ -40,7 +40,7 @@
     "codigos": ["OK", "SIN_STOCK", "PRECIO_CAMBIADO", "SOLICITUD_VENCIDA", "TIEMPO_INCOHERENTE", "PLAN_NO_HABILITADO", "CUPO_INSUFICIENTE", "TASA_NO_VIGENTE", "OPERACION_MODIFICADA", "PAGO_EN_VERIFICACION"]
   },
   "rutas_nuevas_propuestas": [
-    {"metodo": "POST", "ruta": "/empresas", "cuerpo": "alta de empresa; superadministrador", "respuesta": "empresa creada y plan asignado"},
+    {"metodo": "POST", "ruta": "/empresas", "cuerpo": "alta de empresa; superadministrador", "respuesta": "empresa y administrador inicial creados; plan pendiente de asignacion"},
     {"metodo": "POST", "ruta": "/empresas/{empresa_id}/suscripciones", "cuerpo": "plan, fechas manuales y motivo; superadministrador", "respuesta": "suscripcion versionada"},
     {"metodo": "GET", "ruta": "/empresas/mi-plan", "respuesta": "plan, vigencia, gracia y capacidad efectiva"},
     {"metodo": "GET", "ruta": "/catalogo/descarga", "respuesta": "catalogo publico versionado y fecha de descarga"},

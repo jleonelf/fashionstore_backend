@@ -1,6 +1,6 @@
 # Contrato compartido de API y sincronización
 
-**Estado:** diseño para CU28–CU34 y cambios en CU08/CU14/CU15. No equivale al OpenAPI real. Las decisiones aprobadas se resumen aquí y en [integracion.md](integracion.md); la especificación académica completa se conserva fuera de estos repositorios.
+**Estado:** diseño para CU28–CU34 y cambios en CU08/CU14/CU15. No equivale al OpenAPI real. Las decisiones aprobadas se resumen aquí y en [integracion.md](integracion.md); las 37 fichas funcionales están en [casos-de-uso.md](casos-de-uso.md) y los acuerdos íntegros aplicables en [reglas-aprobadas.md](reglas-aprobadas.md).
 
 ## Identidad y versión
 

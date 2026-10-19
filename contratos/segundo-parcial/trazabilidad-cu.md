@@ -1,6 +1,6 @@
 # Trazabilidad de casos de uso a contratos
 
-Versión documental 0.1.0. Las fichas académicas CU01–CU25 son la línea base **actualizada** y CU26–CU37 son las ampliaciones del segundo parcial. Este mapa identifica qué se conserva, qué se extiende y qué contrato implementa cada cambio. `B` = backend, `W` = Angular web/PWA, `M` = Flutter cliente. Todos los datos empresariales de CU01–CU25 requieren aislamiento por empresa, aunque una fila no repita ese requisito. «Online» significa que no se agrega comportamiento offline a ese CU.
+Versión documental 0.1.1. Las fichas académicas CU01–CU25 son la línea base **actualizada** y CU26–CU37 son las ampliaciones del segundo parcial. Este mapa identifica qué se conserva, qué se extiende y qué contrato implementa cada cambio; [paquetes-cu.md](paquetes-cu.md) fija el paquete y la carpeta donde se implementa cada CU. `B` = backend, `W` = Angular web/PWA, `M` = Flutter cliente. Todos los datos empresariales de CU01–CU25 requieren aislamiento por empresa, aunque una fila no repita ese requisito. «Online» significa que no se agrega comportamiento offline a ese CU.
 
 ## CU existentes: impacto concreto
 
