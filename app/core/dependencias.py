@@ -8,7 +8,7 @@ from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 from backend.app.core.config import settings
 from backend.app.core.database import get_db
-from backend.app.models.seguridad import Usuario
+from backend.app.core.modules.identidad_empresas.models import Usuario
 
 security = HTTPBearer(auto_error=False)
 

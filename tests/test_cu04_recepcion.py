@@ -4,8 +4,8 @@ from decimal import Decimal
 from httpx import AsyncClient
 from sqlalchemy import select
 from backend.app.core.database import AsyncSessionLocal
-from backend.app.models.catalogo import Categoria, Talla, Color, Producto, VarianteProducto
-from backend.app.models.inventario import InventarioSucursal, MovimientoInventario
+from backend.app.core.modules.catalogo.models import Categoria, Talla, Color, Producto, VarianteProducto
+from backend.app.core.modules.inventario.models import InventarioSucursal, MovimientoInventario
 
 async def _obtener_ciudad_sucursal(cliente_http):
     # Intentar usar sucursal existente, si no crear nueva

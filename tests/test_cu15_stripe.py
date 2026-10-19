@@ -5,7 +5,7 @@ import uuid
 import pytest
 from httpx import AsyncClient
 
-from backend.app.core import stripe_gateway as gw
+from backend.app.core.modules.ventas_pagos.integraciones import stripe_gateway as gw
 from backend.app.core.config import settings
 from tests.helpers_ciclo2 import (
     crear_cliente, crear_sucursal, crear_variante_con_stock, sucursal_semilla,

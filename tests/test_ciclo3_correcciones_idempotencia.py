@@ -115,7 +115,7 @@ async def test_decart_misma_clave_otro_usuario_token_propio(cliente_http: AsyncC
             assert r2.json()["client_token"] != t1 or True  # lo esencial: B no comparte el registro de A
             # Verificar en base que los ámbitos son distintos por usuario.
             from backend.app.core.database import AsyncSessionLocal
-            from backend.app.models.ciclo3 import RegistroIdempotencia
+            from backend.app.core.modules.ventas_pagos.models import RegistroIdempotencia
             from sqlalchemy import select
             async with AsyncSessionLocal() as db:
                 filas = (await db.execute(

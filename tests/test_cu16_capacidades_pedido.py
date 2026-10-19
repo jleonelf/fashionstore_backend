@@ -19,7 +19,7 @@ async def _checkout(cli, suc, var, modalidad="RECOJO"):
 
 
 async def _pagar_venta(cli, venta_id: str, monkeypatch):
-    from backend.app.core import stripe_gateway as gw
+    from backend.app.core.modules.ventas_pagos.integraciones import stripe_gateway as gw
     from backend.app.core.config import settings
     monkeypatch.setattr(settings, "STRIPE_ENABLED", True)
     monkeypatch.setattr(settings, "STRIPE_SECRET_KEY", "sk_test_falsa")

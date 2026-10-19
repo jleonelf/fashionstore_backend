@@ -106,3 +106,10 @@ Si pytest muestra el mensaje de protección (`... base EFECTIVA es '...'`),
 revise que `POSTGRES_DB`/`DATABASE_URL` apunten a `fashionstore_test`
 en esa terminal antes de reintentar. Nunca se truncó ni se limpió
 `fashionstore_db` desde pytest.
+
+## 5. Proveedor IA durante las pruebas
+
+El fixture automático de `conftest.py` deja `settings.GEMINI_API_KEY` vacío para
+cada prueba. Así se usa el proveedor determinista aunque `backend/.env` tenga
+una clave Gemini, y la suite no depende de llamadas externas. La aplicación
+fuera de pytest conserva su configuración normal.

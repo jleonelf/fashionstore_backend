@@ -19,7 +19,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.app.models.ciclo3 import RegistroIdempotencia
+from backend.app.core.modules.ventas_pagos.models import RegistroIdempotencia
 
 
 def hash_payload(payload: Any) -> str:

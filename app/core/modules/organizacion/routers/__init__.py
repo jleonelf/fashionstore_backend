@@ -1,0 +1,4 @@
+from backend.app.core.modules.organizacion.routers.ciudades import router as router_ciudades
+from backend.app.core.modules.organizacion.routers.sucursales import router as router_sucursales
+
+__all__ = ["router_ciudades", "router_sucursales"]

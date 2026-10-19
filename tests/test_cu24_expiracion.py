@@ -7,8 +7,8 @@ import uuid
 from httpx import AsyncClient
 from sqlalchemy import select, func
 from backend.app.core.database import AsyncSessionLocal
-from backend.app.models.inventario import InventarioSucursal, MovimientoInventario
-from backend.app.models.comercial import Reserva
+from backend.app.core.modules.inventario.models import InventarioSucursal, MovimientoInventario
+from backend.app.core.modules.reservas_traslados.models import Reserva
 from tests.helpers_ciclo2 import (
     activar_adelanto,
     bolsa,
@@ -111,7 +111,7 @@ async def test_expira_con_adelanto_72h(cliente_http: AsyncClient):
         assert rid in r.json()["expiradas"]
         # El adelanto no reembolsable permanece registrado.
         async with AsyncSessionLocal() as db:
-            from backend.app.models.comercial import Pago
+            from backend.app.core.modules.ventas_pagos.models import Pago
 
             pagos = (
                 await db.execute(

@@ -13,11 +13,11 @@ import pytest
 from httpx import AsyncClient
 from sqlalchemy import select
 from backend.app.core.database import AsyncSessionLocal
-from backend.app.models.catalogo import Categoria, Talla, Color, Producto, VarianteProducto
-from backend.app.models.inventario import InventarioSucursal, MovimientoInventario
-from backend.app.services.inventario_service import InventarioService
-from backend.app.repositories.movimiento_repository import MovimientoRepository
-from backend.app.repositories.inventario_repository import InventarioRepository
+from backend.app.core.modules.catalogo.models import Categoria, Talla, Color, Producto, VarianteProducto
+from backend.app.core.modules.inventario.models import InventarioSucursal, MovimientoInventario
+from backend.app.core.modules.inventario.services.inventario_service import InventarioService
+from backend.app.core.modules.inventario.repositories.movimiento_repository import MovimientoRepository
+from backend.app.core.modules.inventario.repositories.inventario_repository import InventarioRepository
 
 
 async def _obtener_ciudad_sucursal(cliente_http: AsyncClient):
