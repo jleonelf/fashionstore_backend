@@ -7,8 +7,8 @@ import uuid
 from httpx import AsyncClient
 from sqlalchemy import select, func
 from backend.app.core.database import AsyncSessionLocal
-from backend.app.models.inventario import InventarioSucursal, MovimientoInventario
-from backend.app.models.comercial import Venta
+from backend.app.core.modules.inventario.models import InventarioSucursal, MovimientoInventario
+from backend.app.core.modules.ventas_pagos.models import Venta
 from tests.helpers_ciclo2 import (
     bolsa,
     crear_cliente,
@@ -187,7 +187,7 @@ async def test_merma_ok_sin_causa_400_y_permisos(cliente_http: AsyncClient):
 
 
 async def test_fallo_kardex_revierte_devolucion(monkeypatch, cliente_http: AsyncClient):
-    from backend.app.repositories.movimiento_repository import MovimientoRepository
+    from backend.app.core.modules.inventario.repositories.movimiento_repository import MovimientoRepository
 
     suc, var, comp, cajero, enc, cli = await _flujo_venta(cliente_http, tag="d4")
     try:

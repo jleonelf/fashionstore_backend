@@ -11,7 +11,7 @@ import app  # noqa: F401  alias backend.*
 from sqlalchemy import text
 
 from backend.app.core.database import AsyncSessionLocal
-from backend.app.models.catalogo import (
+from backend.app.core.modules.catalogo.models import (
     Categoria, Color, Producto, Talla, VarianteProducto,
 )
 from tests.helpers_ciclo2 import UsuarioPrueba  # noqa: F401  re-export
@@ -162,17 +162,17 @@ class FakeStripe:
     """Envoltorio del FakeStripeGateway con helpers de estado para pruebas."""
 
     def __init__(self):
-        from backend.app.core import stripe_gateway as gw
+        from backend.app.core.modules.ventas_pagos.integraciones import stripe_gateway as gw
 
         self.gw = gw.FakeStripeGateway()
 
     def instalar(self):
-        from backend.app.core import stripe_gateway as gw
+        from backend.app.core.modules.ventas_pagos.integraciones import stripe_gateway as gw
 
         gw.fijar_gateway(self.gw)
 
     def desinstalar(self):
-        from backend.app.core import stripe_gateway as gw
+        from backend.app.core.modules.ventas_pagos.integraciones import stripe_gateway as gw
 
         gw.fijar_gateway(None)
 
@@ -186,7 +186,7 @@ def instalar_decart_falso(token: str = "tok-corto-prueba"):
     """
     from datetime import datetime, timezone
 
-    from backend.app.core import decart_client
+    from backend.app.core.modules.experiencia_cliente.integraciones import decart_client
 
     capturas: dict = {}
 
@@ -208,19 +208,19 @@ def instalar_decart_falso(token: str = "tok-corto-prueba"):
 
 
 def desinstalar_decart_falso():
-    from backend.app.core import decart_client
+    from backend.app.core.modules.experiencia_cliente.integraciones import decart_client
 
     decart_client.fijar_creador_falso(None)
 
 
 def instalar_validador_falso(modo: str = "ok"):
     """Validador de imágenes sin red para pruebas (sintaxis real + modo)."""
-    from backend.app.core import decart_imagen as di
+    from backend.app.core.modules.experiencia_cliente.integraciones import decart_imagen as di
 
     di.fijar_validador(di.ValidadorFalso(modo))
 
 
 def desinstalar_validador_falso():
-    from backend.app.core import decart_imagen as di
+    from backend.app.core.modules.experiencia_cliente.integraciones import decart_imagen as di
 
     di.fijar_validador(None)

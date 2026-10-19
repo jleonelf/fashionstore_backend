@@ -92,7 +92,7 @@ async def test_transiciones_recojo_y_delivery(cliente_http: AsyncClient, monkeyp
                                        json={"estado": "PREPARADO"})
             assert r.status_code == 409, r.text
             # Pagar vía webhook fake para habilitar el flujo.
-            from backend.app.core import stripe_gateway as gw
+            from backend.app.core.modules.ventas_pagos.integraciones import stripe_gateway as gw
             from backend.app.core.config import settings
             from tests.helpers_ciclo3 import FakeStripe
             import json as _json

@@ -61,7 +61,7 @@ async def test_inyeccion_rechazada_422_y_sin_sql(cliente_http: AsyncClient):
 async def test_sin_productos_inexistentes_ni_ids_inventados(cliente_http: AsyncClient):
     """Toda variante sugerida existe y está activa en catálogo."""
     from backend.app.core.database import AsyncSessionLocal
-    from backend.app.models.catalogo import VarianteProducto
+    from backend.app.core.modules.catalogo.models import VarianteProducto
 
     async with await crear_cliente("iax") as cli:
         r = await cli.client.post("/api/v1/ia/recomendaciones", json={"limite": 20})

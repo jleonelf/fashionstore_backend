@@ -267,7 +267,7 @@ async def aplicar_esquema_ciclo1() -> None:
 
     from backend.app.core.config import settings
     from backend.app.core.database import Base
-    import backend.app.models  # noqa: F401  registra metadata completa
+    import backend.app.db.modelos  # noqa: F401  registra metadata completa
 
     tablas = [
         t
@@ -289,7 +289,7 @@ async def aplicar_esquema() -> None:
 
     from backend.app.core.config import settings
     from backend.app.core.database import Base
-    import backend.app.models  # noqa: F401  registra metadata completa
+    import backend.app.db.modelos  # noqa: F401  registra metadata completa
 
     engine = create_async_engine(settings.async_database_url)
     try:
@@ -303,14 +303,14 @@ async def aplicar_esquema() -> None:
 async def semilla_minima() -> None:
     from backend.app.core.database import AsyncSessionLocal
     from backend.app.core.seguridad import generar_contrasenia_hash
-    from backend.app.models.catalogo import (
+    from backend.app.core.modules.catalogo.models import (
         Categoria,
         Color,
         Proveedor,
         Talla,
     )
-    from backend.app.models.organizacion import Ciudad, Sucursal
-    from backend.app.models.seguridad import Rol, Usuario
+    from backend.app.core.modules.organizacion.models import Ciudad, Sucursal
+    from backend.app.core.modules.identidad_empresas.models import Rol, Usuario
 
     email_admin = os.getenv("TEST_ADMIN_EMAIL", "admin@fashionstore.com")
     clave_admin = os.getenv("TEST_ADMIN_PASSWORD", "Fashion123!")

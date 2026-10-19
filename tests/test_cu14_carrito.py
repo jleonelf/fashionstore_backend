@@ -156,7 +156,7 @@ async def test_checkout_concurrencia_ultima_unidad(cliente_http: AsyncClient):
 
 async def test_checkout_rollback_si_falla_kardex(cliente_http: AsyncClient, monkeypatch):
     """Si falla Kardex, no hay venta ni movimiento de stock."""
-    from backend.app.repositories import movimiento_repository as mov_mod
+    from backend.app.core.modules.inventario.repositories import movimiento_repository as mov_mod
 
     async with await crear_cliente("c14r") as cli:
         suc = await sucursal_semilla(cliente_http)

@@ -48,7 +48,7 @@ def test_openapi_disponibilidad_tiene_respuesta_tipada():
 
 def test_dto_filtros_opciones_preserva_json_actual():
     """El DTO acepta exactamente el JSON que el endpoint ya devolvía."""
-    from backend.app.schemas.catalogo_extra import FiltrosOpcionesDTO
+    from backend.app.core.modules.catalogo.schemas import FiltrosOpcionesDTO
 
     payload = {
         "categorias": [{"id": str(uuid.uuid4()), "nombre": "Camisas"}],
@@ -68,7 +68,7 @@ def test_dto_filtros_opciones_preserva_json_actual():
 
 def test_dto_disponibilidad_preserva_json_actual():
     """El DTO acepta exactamente cada fila que disponibilidadPorSucursal ya devolvía."""
-    from backend.app.schemas.catalogo_extra import DisponibilidadSucursalDTO
+    from backend.app.core.modules.catalogo.schemas import DisponibilidadSucursalDTO
 
     ahora = datetime.now(timezone.utc)
     fila = {

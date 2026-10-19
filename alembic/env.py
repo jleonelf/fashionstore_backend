@@ -17,7 +17,7 @@ if str(BACKEND_ROOT) not in sys.path:
 
 import app  # noqa: F401,E402  configura alias backend.*
 from backend.app.core.database import Base  # noqa: E402
-import backend.app.models  # noqa: F401,E402  registra metadata completa
+import backend.app.db.modelos  # noqa: F401,E402  registra metadata completa
 
 config = context.config
 

@@ -15,8 +15,8 @@ _scheduler = None
 
 async def ejecutar_expiracion_programada() -> None:
     from backend.app.core.database import AsyncSessionLocal
-    from backend.app.services.reserva_service import ReservaService
-    from backend.app.services.stripe_service import StripeService
+    from backend.app.core.modules.reservas_traslados.services.reserva_service import ReservaService
+    from backend.app.core.modules.ventas_pagos.services.stripe_service import StripeService
 
     async with AsyncSessionLocal() as db:
         servicio = ReservaService(db)

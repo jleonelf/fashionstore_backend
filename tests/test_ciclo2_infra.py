@@ -35,7 +35,7 @@ from backend.app.core.idempotencia import (
     validar_clave_idempotencia,
 )
 from backend.app.core.seguridad import generar_contrasenia_hash
-from backend.app.models.catalogo import (
+from backend.app.core.modules.catalogo.models import (
     VarianteProducto,
     Producto,
     Talla,
@@ -43,12 +43,12 @@ from backend.app.models.catalogo import (
     Categoria,
     Proveedor,
 )
-from backend.app.models.inventario import InventarioSucursal, MovimientoInventario
-from backend.app.models.organizacion import Sucursal
-from backend.app.models.comercial import Reserva
-from backend.app.models.seguridad import Cliente, Rol, Usuario
-from backend.app.repositories.inventario_repository import InventarioRepository
-from backend.app.repositories.movimiento_repository import MovimientoRepository
+from backend.app.core.modules.inventario.models import InventarioSucursal, MovimientoInventario
+from backend.app.core.modules.organizacion.models import Sucursal
+from backend.app.core.modules.reservas_traslados.models import Reserva
+from backend.app.core.modules.identidad_empresas.models import Cliente, Rol, Usuario
+from backend.app.core.modules.inventario.repositories.inventario_repository import InventarioRepository
+from backend.app.core.modules.inventario.repositories.movimiento_repository import MovimientoRepository
 
 TIPO_PRUEBA = "PRUEBA_INFRA"
 

@@ -10,8 +10,9 @@ import pytest
 from httpx import AsyncClient
 from sqlalchemy import select, func
 from backend.app.core.database import AsyncSessionLocal
-from backend.app.models.inventario import InventarioSucursal, MovimientoInventario
-from backend.app.models.comercial import Reserva, Pago
+from backend.app.core.modules.inventario.models import InventarioSucursal, MovimientoInventario
+from backend.app.core.modules.reservas_traslados.models import Reserva
+from backend.app.core.modules.ventas_pagos.models import Pago
 from tests.helpers_ciclo2 import (
     activar_adelanto,
     bolsa,

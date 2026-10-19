@@ -7,7 +7,7 @@ import uuid
 from httpx import AsyncClient
 from sqlalchemy import select
 from backend.app.core.database import AsyncSessionLocal
-from backend.app.models.inventario import InventarioSucursal, MovimientoInventario
+from backend.app.core.modules.inventario.models import InventarioSucursal, MovimientoInventario
 from tests.helpers_ciclo2 import (
     bolsa,
     crear_cliente,

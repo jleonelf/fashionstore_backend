@@ -8,9 +8,9 @@ from decimal import Decimal
 from httpx import AsyncClient
 from sqlalchemy import select, func
 from backend.app.core.database import AsyncSessionLocal
-from backend.app.models.comercial import Venta
-from backend.app.models.inventario import InventarioSucursal, MovimientoInventario
-from backend.app.repositories.movimiento_repository import MovimientoRepository
+from backend.app.core.modules.ventas_pagos.models import Venta
+from backend.app.core.modules.inventario.models import InventarioSucursal, MovimientoInventario
+from backend.app.core.modules.inventario.repositories.movimiento_repository import MovimientoRepository
 from tests.helpers_ciclo2 import (
     activar_adelanto,
     bolsa,

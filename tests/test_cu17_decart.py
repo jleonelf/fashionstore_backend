@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 import pytest
 from httpx import AsyncClient
 
-from backend.app.core import decart_client
+from backend.app.core.modules.experiencia_cliente.integraciones import decart_client
 from backend.app.core import rate_limit
 from backend.app.core.config import settings
 from tests.helpers_ciclo2 import crear_cliente, sucursal_semilla
@@ -137,7 +137,7 @@ async def test_proveedor_indisponible_502_o_503_y_sin_secretos_en_logs(
     cliente_http: AsyncClient, monkeypatch, caplog,
 ):
     """Sin mock del SDK y con clave: el fallo del proveedor es 502/503 tipado."""
-    from backend.app.core import decart_client as dc
+    from backend.app.core.modules.experiencia_cliente.integraciones import decart_client as dc
 
     desinstalar_decart_falso()
 

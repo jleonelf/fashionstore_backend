@@ -11,7 +11,7 @@ from httpx import AsyncClient, ASGITransport
 from sqlalchemy import text
 from backend.app.main import app as aplicacion
 from backend.app.core.database import AsyncSessionLocal
-from backend.app.models.catalogo import Categoria, Color, Producto, Talla, VarianteProducto
+from backend.app.core.modules.catalogo.models import Categoria, Color, Producto, Talla, VarianteProducto
 
 
 def _uid(n: int = 6) -> str:

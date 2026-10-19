@@ -1,0 +1,10 @@
+{
+  "nombre": "fashionstore-segundo-parcial",
+  "version": "0.1.1",
+  "estado": "propuesta-para-revision",
+  "sha256": {
+    "interfaz.json": "30a67154a13b4132cfbd2f438545813dc70cd5eb0dc02ca586a6c56722d53192",
+    "operacion.schema.json": "9fb5b957b1ffe39f3a74b79160182dc407b040378ba1db8306f130741df6cf6c",
+    "resultado.schema.json": "505ee62c00c44ed76538855738ccc4c42bf8ddb6697a161935b7f7559d67cf1e"
+  }
+}

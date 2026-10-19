@@ -7,7 +7,7 @@
 """
 import uuid
 from fastapi import HTTPException, status
-from backend.app.models.seguridad import Usuario
+from backend.app.core.modules.identidad_empresas.models import Usuario
 
 
 def es_admin(usuario: Usuario) -> bool:

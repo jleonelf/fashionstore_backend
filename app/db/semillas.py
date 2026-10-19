@@ -7,12 +7,12 @@ from decimal import Decimal
 from sqlalchemy import select, text
 from backend.app.core.database import AsyncSessionLocal
 from backend.app.core.seguridad import generar_contrasenia_hash
-from backend.app.models.catalogo import (Categoria, Coleccion, Color, ImagenProducto,
+from backend.app.core.modules.catalogo.models import (Categoria, Coleccion, Color, ImagenProducto,
     Producto, ProductoColeccion, ProductoTemporada, Proveedor, Talla, Temporada, VarianteProducto)
-from backend.app.models.inventario import (DetalleLoteRecepcion, InventarioSucursal,
+from backend.app.core.modules.inventario.models import (DetalleLoteRecepcion, InventarioSucursal,
     LoteRecepcion, MovimientoInventario)
-from backend.app.models.organizacion import Ciudad, Sucursal
-from backend.app.models.seguridad import Cliente, Empleado, Rol, Usuario
+from backend.app.core.modules.organizacion.models import Ciudad, Sucursal
+from backend.app.core.modules.identidad_empresas.models import Cliente, Empleado, Rol, Usuario
 
 NAMESPACE = uuid.UUID("4f7f1e1c-d536-4b4a-929f-c4579d5a74f1")
 def uid(nombre): return uuid.uuid5(NAMESPACE, nombre)

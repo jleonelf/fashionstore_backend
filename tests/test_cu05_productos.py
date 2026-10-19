@@ -4,7 +4,7 @@ from httpx import AsyncClient
 from decimal import Decimal
 from sqlalchemy import select
 from backend.app.core.database import AsyncSessionLocal
-from backend.app.models.catalogo import Producto, VarianteProducto
+from backend.app.core.modules.catalogo.models import Producto, VarianteProducto
 
 @pytest.mark.asyncio
 async def test_cu05_maestros_crud_y_activacion(cliente_http: AsyncClient):

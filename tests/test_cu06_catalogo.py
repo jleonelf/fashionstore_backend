@@ -4,9 +4,9 @@ from decimal import Decimal
 from httpx import AsyncClient
 from sqlalchemy import select, update
 from backend.app.core.database import AsyncSessionLocal
-from backend.app.models.catalogo import Producto, VarianteProducto, Categoria, Talla, Color
-from backend.app.models.inventario import InventarioSucursal
-from backend.app.models.organizacion import Sucursal
+from backend.app.core.modules.catalogo.models import Producto, VarianteProducto, Categoria, Talla, Color
+from backend.app.core.modules.inventario.models import InventarioSucursal
+from backend.app.core.modules.organizacion.models import Sucursal
 
 async def _get_or_create_ciudad_sucursal(cliente_http, suffix="CU06"):
     # Intentar reusar sucursales existentes o crear 2
@@ -490,8 +490,8 @@ async def test_cu06_repository_buscarConFiltros_dict_y_porVariante(cliente_http:
     var_id = r_var.json()["id"]
 
     # Probar repository directo con filtros dict
-    from backend.app.repositories.producto_repository import ProductoRepository
-    from backend.app.repositories.inventario_repository import InventarioRepository
+    from backend.app.core.modules.catalogo.repositories.producto_repository import ProductoRepository
+    from backend.app.core.modules.inventario.repositories.inventario_repository import InventarioRepository
     async with AsyncSessionLocal() as db:
         repo = ProductoRepository(db)
         # buscar por filtros dict
@@ -513,7 +513,7 @@ async def test_cu06_repository_buscarConFiltros_dict_y_porVariante(cliente_http:
         # porVariante debe filtrar disponible>0
         # Crear inventario con lote
         # Usar receptores y sucursales existentes
-        from backend.app.models.inventario import InventarioSucursal
+        from backend.app.core.modules.inventario.models import InventarioSucursal
         # Verificar que porVariante sin stock retorna vacío inicialmente
         inv_repo = InventarioRepository(db)
         lista_vacia = await inv_repo.porVariante(uuid.UUID(var_id))
@@ -521,7 +521,7 @@ async def test_cu06_repository_buscarConFiltros_dict_y_porVariante(cliente_http:
         # Crear stock manualmente vía lote service no directo, pero podemos ingresar via repo
         # Ingresar 5 en una sucursal
         # Obtener sucursal id
-        from backend.app.models.organizacion import Sucursal as SucModel
+        from backend.app.core.modules.organizacion.models import Sucursal as SucModel
         res_suc = await db.execute(select(SucModel).limit(1))
         suc = res_suc.scalars().first()
         assert suc is not None
@@ -543,15 +543,15 @@ async def test_cu06_endpoints_controller_presentacion_nombres(cliente_http: Asyn
     y que los endpoints responden (contratos Presentación/Controller/Datos)
     """
     # Verificar que CatalogoService tiene métodos listar/filtrar y InventarioService disponibilidadPorSucursal
-    from backend.app.services.catalogo_service import CatalogoService
-    from backend.app.services.inventario_service import InventarioService
+    from backend.app.core.modules.catalogo.services.catalogo_service import CatalogoService
+    from backend.app.core.modules.inventario.services.inventario_service import InventarioService
     import inspect
     assert hasattr(CatalogoService, "listar"), "CatalogoService.listar() debe existir"
     assert hasattr(CatalogoService, "filtrar"), "CatalogoService.filtrar() debe existir"
     assert hasattr(InventarioService, "disponibilidadPorSucursal"), "InventarioService.disponibilidadPorSucursal() debe existir"
     # Verificar ProductoRepository buscarConFiltros e InventarioRepository porVariante
-    from backend.app.repositories.producto_repository import ProductoRepository
-    from backend.app.repositories.inventario_repository import InventarioRepository
+    from backend.app.core.modules.catalogo.repositories.producto_repository import ProductoRepository
+    from backend.app.core.modules.inventario.repositories.inventario_repository import InventarioRepository
     assert hasattr(ProductoRepository, "buscarConFiltros")
     assert hasattr(InventarioRepository, "porVariante")
     sig = inspect.signature(ProductoRepository.buscarConFiltros)

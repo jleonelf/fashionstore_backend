@@ -45,6 +45,12 @@ from backend.app.core.config import settings  # noqa: E402
 from backend.app.main import app  # noqa: E402
 
 
+@pytest.fixture(autouse=True)
+def _ia_determinista_en_pruebas(monkeypatch):
+    """Evita que una clave Gemini del entorno active llamadas externas en la suite."""
+    monkeypatch.setattr(settings, "GEMINI_API_KEY", "")
+
+
 def _nombre_base_desde_url(url: str) -> str:
     """Extrae el nombre de la base desde una URL SQLAlchemy.
 

@@ -2,7 +2,7 @@
 import pytest
 from httpx import AsyncClient
 
-from backend.app.core import decart_imagen as di
+from backend.app.core.modules.experiencia_cliente.integraciones import decart_imagen as di
 from backend.app.core.config import settings
 from tests.helpers_ciclo2 import crear_cliente, sucursal_semilla
 from tests.helpers_ciclo3 import (
@@ -49,7 +49,7 @@ async def test_host_permitido_ok(cliente_http: AsyncClient, _base):
 async def test_host_no_permitido_422(cliente_http: AsyncClient, _base, monkeypatch):
     import uuid
     from backend.app.core.database import AsyncSessionLocal
-    from backend.app.models.catalogo import VarianteProducto
+    from backend.app.core.modules.catalogo.models import VarianteProducto
 
     suc = await sucursal_semilla(cliente_http)
     var = await crear_variante_probador(cliente_http, suc, 2, tag="img2")

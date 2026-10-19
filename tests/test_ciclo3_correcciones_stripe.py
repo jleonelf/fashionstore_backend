@@ -4,7 +4,7 @@ import uuid
 
 from httpx import AsyncClient
 
-from backend.app.core import stripe_gateway as gw
+from backend.app.core.modules.ventas_pagos.integraciones import stripe_gateway as gw
 from backend.app.core.config import settings
 from tests.helpers_ciclo2 import crear_cliente, crear_variante_con_stock, sucursal_semilla
 from tests.helpers_ciclo3 import (
@@ -117,7 +117,7 @@ async def test_evento_livemode_true_rechazado_sin_efectos(cliente_http: AsyncCli
 
 async def test_sin_llamadas_reales():
     import inspect
-    from backend.app.services import stripe_service as ss
+    from backend.app.core.modules.ventas_pagos.services import stripe_service as ss
     src = inspect.getsource(ss.StripeService.crearIntencion)
     assert "exigir_test_mode" in src
     src2 = inspect.getsource(ss.StripeService.confirmarWebhook)
