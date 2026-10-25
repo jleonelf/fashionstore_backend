@@ -2,7 +2,7 @@
 
 **Estado:** diseño previo a DDL. No se ha ejecutado ninguna migración nueva sobre `fashionstore_db`. El agente debe preparar migraciones Alembic y ensayarlas en una **base de prueba restaurada**, dejando la base original intacta hasta revisión y autorización posterior del propietario.
 
-## Línea base comprobada el 18/10/2026
+## Línea base histórica informada el 18/10/2026
 
 - PostgreSQL local 17 en `127.0.0.1:5432`, base `fashionstore_db`; Alembic `0005_ciclo3_correcciones`.
 - 37 tablas en los esquemas `seguridad`, `organizacion`, `catalogo`, `inventario`, `comercial`, `inteligencia` y `public`. Ninguna tabla empresarial tiene columna `empresa_id` todavía.
@@ -16,8 +16,8 @@
 
 | Etapa Alembic prevista | Objetos nuevos o cambios | Conservación/validación obligatoria |
 |---|---|---|
-| 0006 Identidad y tenant | `organizacion.empresas`, historial de suscripciones/planes; `empresa_id` en usuarios, sucursales, catálogo, inventario, comercio e inteligencia; índices y relaciones tenant; `plataforma.tasas_cambio` global versionada. | Crear empresa heredada y asociar **todos** los registros actuales sin cambiar UUID ni borrar filas. `organizacion.ciudades` y `seguridad.roles` pueden mantenerse como referencias globales. Superadministración separada. |
-| 0007 Sincronización cliente | Referencias horarias, catálogo versionado, `comercial.operaciones_sincronizacion` con UUID/hash/resultado durable; fechas local, recepción y aceptación para reservas/ventas; bandeja y suscripciones push. | El reintento no duplica reserva/venta. Nunca reconstruir resultado previo desde un payload nuevo. |
+| 0006 Identidad y tenant | `organizacion.empresas`, historial de suscripciones/planes; `empresa_id` en usuarios, sucursales, catálogo, inventario, comercio e inteligencia; índices y relaciones tenant. Tasa global CU12 en una migración posterior a esta presentación, salvo dependencia técnica justificada. | Crear empresa heredada y asociar **todos** los registros actuales sin cambiar UUID ni borrar filas. `organizacion.ciudades` permanece referencia global administrada por plataforma; sucursales/tarifas son empresariales. Superadministración separada. No generar suscripción ficticia ni fechas en DDL. |
+| 0007 Sincronización cliente | Referencias horarias, catálogo versionado, `comercial.operaciones_sincronizacion` con UUID/hash/resultado durable; fechas de creación local original, recepción, aceptación y origen efectivo de vencimiento para reservas; bandeja y suscripciones push. | El reintento no duplica reserva/venta. Nunca reconstruir resultado previo desde un payload nuevo. Fecha de visita y recepción no sustituyen el origen del vencimiento; no recalcular reservas históricas por esta aclaración. |
 | 0008 Caja offline | `comercial.turnos_caja`, `inventario.cupos_caja`, `comprometido_caja` no negativo, versión de precios/promociones, referencia de venta local y registros de conciliación/conteo. | Al asignar cupo: libre → comprometido. Al aceptar venta: comprometido → vendido, sin nuevo débito de libre. Cupo no usado se libera solo tras cierre o conteo auditado. |
 | 0009 Cambios y saldo | `comercial.cambios`, detalles/movimientos de cambio, saldo y libro de movimientos por empresa/cliente; importes BOB, pago mixto, referencias idempotentes. Extender pagos con tasa/version e importes BOB/USD congelados. | Valor por unidad y descuentos conservan centavos; saldo no se usa dos veces; no reescribir pagos históricos como USD convertidos. |
 | 0010 Reportes y ML | Índices para fecha de aceptación/tenant/filtros; metadatos de modelos, datasets sintéticos versionados, evaluaciones y resultados de analítica en `inteligencia`. | Entrenamiento fuera de HTTP; artefactos/datos reales aislados por empresa y acceso Profesional. |
@@ -26,8 +26,8 @@ Los nombres `0006`–`0010` son **orden sugerido**, no migraciones ya creadas. S
 
 ## Traspaso de los datos actuales
 
-1. Crear una empresa heredada con identificador estable y asociar usuarios, sucursales, productos/maestros, proveedores, inventario, pedidos, ventas, pagos, movimientos, promociones e IA actuales. Conservar IDs y relaciones existentes.
-2. Las **3 sucursales activas** actuales exceden Básico (2). La empresa heredada necesita Profesional para seguir operando sin desactivar ninguna. La asignación es administrativa con fechas manuales; la migración no debe inventar fecha de vencimiento ni activar cobros SaaS. Preparar un paso de configuración explícito que solicite las fechas al propietario antes de habilitar nuevas operaciones bajo control de plan.
+1. Crear una empresa heredada con identificador estable y asociar **todos** los usuarios, clientes, empleados, sucursales, productos/maestros, proveedores, inventario, pedidos, reservas, ventas, pagos, movimientos, promociones, datos de IA e historial existentes. Conservar IDs, relaciones y sucursales; no borrar ni reconstruir registros para hacerlos caber en un plan. Ciudades permanecen globales, sin convertirlas en propiedad de la empresa heredada.
+2. **Decisión aprobada el 25/10/2026:** si se confirma en la base de destino el conteo histórico de 3 sucursales activas, asignar **administrativamente Profesional** a la empresa heredada para mantenerlas operativas. Si el conteo real difiere, registrar la diferencia y revisar la asignación antes de aplicarla. La configuración administrativa exige fechas de inicio y vencimiento introducidas explícitamente; la migración no inventa fechas, no crea suscripción ficticia y no activa cobros SaaS. No se verificó aquí el conteo actual. Básico permanece en 2 y Profesional en 10 sucursales activas configurables; no desactivar sucursales para acomodar la empresa heredada.
 3. Sustituir unicidades globales por unicidades con empresa cuando el dato pertenezca al negocio: correo, SKU, código de barras, NIT, códigos de promoción/venta/reserva y maestros aplicables. Mantener PK UUID globales y añadir FKs compuestas o verificaciones equivalentes para impedir referencias entre empresas.
 4. Crear índices por `empresa_id` y filtros de consulta. Configurar y probar RLS con el rol **real de la aplicación**, sin `BYPASSRLS`; sesiones de superadministración, jobs, webhook, exportaciones y consultas por ID deben establecer ámbito explícito. Nunca confiar en un `empresa_id` del cliente como autorización.
 5. Primero añadir columnas nullable, rellenar y verificar que no quedan filas empresariales sin empresa; luego fijar `NOT NULL`, unicidades y FKs. Para usuarios de superadministración, usar regla explícita aparte de la cuenta empresarial. Evitar bloqueos largos con índices/validación por fases si el tamaño crece.
@@ -40,3 +40,13 @@ Los nombres `0006`–`0010` son **orden sugerido**, no migraciones ya creadas. S
 4. Si la base original se migra posteriormente y falla, no ejecutar downgrade destructivo a ciegas. Detener escrituras, diagnosticar estado y restaurar desde el backup verificado a una base nueva para recuperación supervisada.
 
 Este plan cubre esquema y datos. Stripe Test, Web Push/FCM y artefactos ML tienen configuración/archivos externos que el dump de PostgreSQL no respalda.
+
+## Ajuste a la primera presentación actual
+
+Los nombres de etapas y revisiones anteriores son sugerencias históricas, no instrucciones para crear números que ya podrían existir en el checkout. Por lectura de `alembic/versions/` se encontraron las revisiones `0001`–`0005`; además, `app/main.py` ejecuta DDL de restricciones durante `lifespan()`, por lo que iniciar la API también requiere base aislada al ensayar. Medir conteos reales antes de diseñar la migración. Esta revisión no verificó los conteos, el dump ni el PostgreSQL de esa instalación.
+
+Primero empresa/identidad/planes/sucursales (CU01/CU02/CU13/CU15), luego soporte de descarga, operación/resultado de reservas y fechas (CU03/CU04/CU16/CU18). CU12 tasa no es caso prioritario actual. Notificaciones, caja, cambios/saldo y ML quedan en las etapas posteriores, salvo infraestructura de soporte indispensable y documentada.
+
+Para reservas, diseñar el backfill y la adaptación sin recalcular en esta tarea fechas históricas: `ReservaService.crear` usa hoy `fecha_visita + 1 día` cuando hay visita y el servicio de adelanto usa `reserva.fecha_creacion + 72 h`. El nuevo origen debe ser creación central para reserva online y creación local original conservada para offline aceptada; adelanto confirmado online antes de vencer lleva a 72 h desde ese origen. Coordinar también cancelación, job de expiración y DTO de fechas. Una solicitud offline ya vencida se rechaza sin stock; tiempo incoherente queda en conflicto durable.
+
+Preparar IndexedDB y SQLite versionados, con separación por empresa/usuario y conservación de pendientes/resultados. No vaciar almacenes al renumerar CU. El paso a caja móvil posterior necesitará tablas locales de ventas/detalles/turnos/cupos/resultados y reglas comunes de autorización; no se ejecuta por entregar estos documentos.

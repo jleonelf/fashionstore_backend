@@ -4,15 +4,18 @@
 
 ## Ubicación de la implementación
 
-[paquetes-cu.md](paquetes-cu.md) fija la carpeta dueña de CU26–CU37 y de las adaptaciones de CU01–CU25. Los modelos, DTO, repositorios, servicios y routers nuevos se agregan al paquete `app/core/modules/<paquete>/` correspondiente; se amplían los archivos existentes cuando la entidad o el servicio ya existe. `caja_offline` es el único paquete backend nuevo previsto. `app/api/v1/api.py` monta los routers y puede montar un adaptador común de sincronización, pero la validación y transacción de cada operación pertenecen a `reservas_traslados`, `ventas_pagos` o `caja_offline`.
+[paquetes-cu.md](paquetes-cu.md) fija la carpeta dueña de los 26 casos actuales y de las funciones LB conservadas. Los modelos, DTO, repositorios, servicios y routers nuevos se agregan al paquete `app/core/modules/<paquete>/` correspondiente; se amplían los archivos existentes cuando la entidad o el servicio ya existe. `caja_offline` es el único paquete backend nuevo previsto. `app/api/v1/api.py` monta los routers y puede montar un adaptador común de sincronización, pero la validación y transacción de cada operación pertenecen a `reservas_traslados`, `ventas_pagos` o `caja_offline`.
 
 `app/core/` conserva infraestructura transversal y `app/db/modelos.py` registra los modelos para Alembic. No recrear `app/models/`, `app/repositories/`, `app/schemas/`, `app/services/` ni `app/api/v1/endpoints/`. Una migración vive en `alembic/versions/`, no dentro de un paquete. Las integraciones Decart y Stripe existentes ya están bajo sus paquetes dueños; el proveedor IA compartido está en `app/core/integraciones/`.
 
 ## Autorización y planes
 
 - Empresa se resuelve de la identidad validada; superadministración es un ámbito separado. Misma dirección de correo puede registrarse en dos empresas, pero el login identifica cuál. Consultas, escrituras, webhooks, tareas, reportes, reintentos y recursos por ID verifican tenant antes de devolver datos.
+- El enlace público de navegación `/tienda/{empresa_codigo}` es propuesto y solo selecciona catálogo público; no es ruta API implementada ni permiso. Conservar ese contexto hacia registro/login, exigir validación de pertenencia y no reutilizar silenciosamente una sesión de otra empresa. La selección inicial de empresas queda fuera de los ocho prioritarios.
+- Ciudades son catálogo global de plataforma. Solo plataforma las modifica; la empresa consulta/selecciona ciudades y administra sucursales/tarifas propias. Compartir ciudad no comparte datos empresariales.
 - PostgreSQL compartido: `empresa_id` en datos empresariales, relaciones compuestas y políticas RLS donde corresponda. Probar con rol de aplicación real y dos empresas, incluidas consultas indirectas, exportaciones y claves idempotentes.
 - Plan Básico: máximo dos sucursales activas. Profesional: máximo diez, reportes generativos y ambos módulos ML. Ambos admiten operación offline acordada. Vigencia manual y gracia de 72 horas; tras ella no abrir ventas, reservas ni turnos nuevos, pero sí consultas, posventa en plazo y cierre de compromisos previos.
+- Conservar íntegra la empresa heredada. Si el conteo real confirma las tres sucursales activas históricas, asignar Profesional administrativamente con fechas explícitas; si difiere, registrar y revisar. No crear suscripción ficticia en migración ni desactivar sucursales.
 
 ## Persistencia e invariantes
 
@@ -29,7 +32,7 @@
 
 ## Límites transaccionales
 
-1. **Reserva:** bloquear filas de inventario afectadas; validar plazo desde creación local, sucursal y stock; guardar reserva, líneas, cantidades/Kardex y resultado del comando en una transacción.
+1. **Reserva:** bloquear filas de inventario afectadas; online vence 24 h desde creación central y offline aceptada 24 h desde creación local original. Adelanto confirmado online antes del vencimiento lleva a 72 h desde el mismo origen. Visita, recepción y reintentos no lo cambian; solicitud offline vencida se rechaza sin apartado y tiempo incoherente queda en conflicto durable. Guardar reserva, líneas, cantidades/Kardex y resultado del comando en una transacción; coordinar adelanto, cancelación y expiración automática.
 2. **Compra diferida:** revalidar precio y stock, pedir aceptación si corresponde; apartado completo, venta pendiente, líneas, compromiso/Kardex y resultado en una transacción. Stripe se crea después como efecto externo recuperable. Apartado: 60 minutos desde aceptación central.
 3. **Caja:** asignación de cupos bloquea stock libre. Sincronización consume cupo previamente asignado y registra venta, efectivo, detalle, Kardex y resultado en una transacción **sin segundo descuento**. Ventas válidas hechas antes de baja de empleado/plan se registran y marcan para revisión.
 4. **Cambio/saldo:** bloquear venta/líneas y saldo; registrar devolución, reemplazo, movimientos y diferencia. Si requiere Stripe, usar estado pendiente y reservar reemplazo/saldo; confirmar o liberar tras reconciliación, sin transacción SQL abierta durante llamada remota.
@@ -61,4 +64,14 @@ Estos nombres son contratos de intención, no afirmación de que hoy existan. Al
 - Tasa vigente/ausente/cambiada, USD aceptado, webhook tardío, saldo mixto y cambio concurrente.
 - Métricas de reportes por fecha central y validación reproducible de los dos modelos.
 
-El OpenAPI real se exportará desde la aplicación implementada y se confrontará con [compartido.md](compartido.md); todavía no existe OpenAPI del segundo parcial.
+El OpenAPI real se exportará desde la aplicación implementada y se confrontará con [compartido.md](compartido.md); esta revisión no verificó un OpenAPI implementado del segundo parcial.
+
+## Prioridad de esta presentación
+
+Implementar CU01, CU02, CU03, CU04, CU13, CU15, CU16 y CU18, según [primera-presentacion.md](primera-presentacion.md). Los apartados de pagos, caja, posventa y ML conservan invariantes para no romper el producto, pero no son entregables completos actuales. La tasa global CU12 no se incorpora automáticamente al primer bloque.
+
+Crear la empresa y su administrador inicial consistentemente; validar permiso de plataforma. CU02 separa administración de plataforma y consulta del plan propio. CU13 mantiene registro público de clientes y evita elevación de rol. CU15 valida límites al crear/activar sucursal y compromisos al desactivar. CU03 entrega catálogo público del ámbito solicitado; no exigir sesión empresarial a un visitante del catálogo publicado, y nunca incluir información privada por ello.
+
+CU04 y CU18 comparten reglas centrales y bloqueo ordenado de inventario. CU04 persiste también rechazos y conflictos; no ejecutar reserva dentro de una transacción que falle antes de guardar el resultado comercial. Validar usuario y tenant antes de buscar una respuesta idempotente. Una reserva online cuenta el plazo desde creación central; una solicitud offline aceptada mantiene su creación local. No confiar en el reloj local como prueba suficiente.
+
+El código actual de `ReservaService.crear` calcula `fecha_visita + 1 día` cuando recibe visita; el adelanto recalcula desde `reserva.fecha_creacion`. Adaptar ambas rutas y el job de expiración al origen pactado, sin presentar esa adaptación como implementada ni modificar datos históricos en esta revisión. La ventana privada offline de 8 h desde login online se impone en clientes sin forzar que el JWT actual de 24 h baje a 8 h; sincronización siempre requiere token vigente y autorización central.

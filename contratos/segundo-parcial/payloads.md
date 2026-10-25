@@ -1,6 +1,6 @@
 # Payloads de integración propuestos
 
-Versión 0.1.1. Son ejemplos normativos de **forma y significado**, con UUID/fechas/importes ilustrativos. No prueban que la ruta exista. Los campos de identidad en el cuerpo se contrastan con sesión, empresa y rol. Salvo indicación, cada escritura usa `Idempotency-Key` UUID, y un reintento idéntico conserva efecto y respuesta. Las operaciones de sincronización usan su `operacion_id` como clave estable.
+Versión 0.2.0. Son ejemplos normativos de **forma y significado**, con UUID/fechas/importes ilustrativos. No prueban que la ruta exista. Los campos de identidad en el cuerpo se contrastan con sesión, empresa y rol. Salvo indicación, cada escritura usa `Idempotency-Key` UUID, y un reintento idéntico conserva efecto y respuesta. Las operaciones de sincronización usan su `operacion_id` como clave estable.
 
 ## Reserva diferida
 
@@ -25,7 +25,7 @@ Versión 0.1.1. Son ejemplos normativos de **forma y significado**, con UUID/fec
 }
 ```
 
-Aceptada: `{"operacion_id":"10000000-0000-4000-8000-000000000001","estado":"ACEPTADA","codigo":"OK","recibida_en":"2026-10-18T10:02:00-04:00","aceptada_en":"2026-10-18T10:02:00-04:00","recurso_id":"80000000-0000-4000-8000-000000000001","detalle":"Reserva aceptada"}`. Vencida, incoherencia temporal o falta de stock: HTTP 200, `estado=RECHAZADA`, `codigo` respectivo, sin `recurso_id`. `GET /sincronizacion/operaciones/{operacion_id}` devuelve la misma respuesta durable al dueño autenticado.
+Aceptada: `{"operacion_id":"10000000-0000-4000-8000-000000000001","estado":"ACEPTADA","codigo":"OK","recibida_en":"2026-10-18T10:02:00-04:00","aceptada_en":"2026-10-18T10:02:00-04:00","recurso_id":"80000000-0000-4000-8000-000000000001","detalle":"Reserva aceptada"}`. Vencida o sin stock: HTTP 200, `estado=RECHAZADA`, código respectivo, sin `recurso_id`. Incoherencia temporal: HTTP 200, `estado=CONFLICTO`, `codigo=TIEMPO_INCOHERENTE`, resultado durable sin apartado ni `recurso_id`. `GET /sincronizacion/operaciones/{operacion_id}` devuelve la misma respuesta durable al dueño autenticado.
 
 ## Compra diferida y pago
 
@@ -108,3 +108,11 @@ Respuesta: `cambio_id`, `revision`, `valor_reconocido_bob`, `valor_reemplazo_bob
 Tipos: `VENTAS_SUCURSAL_PERIODO`, `PRODUCTOS_MAS_MENOS`, `EVOLUCION_SEMANAL`, `VENTAS_CATEGORIA`. Respuesta común: `tipo`, `filtros_aplicados`, `generado_en`, `columnas`, `filas`, `totales` (`brutas_bob`, `descuentos_bob`, `cambios_devoluciones_bob`, `netas_bob`, `saldo_emitido_bob`, `saldo_usado_bob`). Exportar añade `formato` (`excel`, `csv`, `pdf`) y produce archivo del mismo conjunto de datos. `POST /reportes/interpretar` recibe `{ "texto": "..." }` (texto escrito o transcrito en web); devuelve `tipo` y filtros propuestos para revisión antes de consultar. Gemini nunca envía SQL ejecutable.
 
 `GET /analitica/pronosticos` devuelve producto/sucursal, semana prevista, unidades, versión, periodo de entrenamiento, evaluación y origen de datos. `GET /analitica/grupos-productos` devuelve grupo, productos, rasgos y versión/métrica. Ambos responden `DATOS_INSUFICIENTES` en vez de inventar resultados cuando aplica. `GET /notificaciones/mias` devuelve elementos con `notificacion_id`, `tipo`, `recurso_id`, `creada_en`, `leida_en` opcional y enlace interno autorizado; FCM/Web Push transportan el ID, no el estado final ni datos sensibles. Los clientes reconsultan autenticados al abrir un aviso.
+
+## Ejemplos y contratos que debe cerrar la primera presentación
+
+La reserva diferida y su resultado de las secciones anteriores corresponden al actual CU04. TIEMPO_INCOHERENTE usa CONFLICTO; no se descarta el registro. La descarga CU03 debe exponer empresa/ámbito, fecha/versión y productos/variantes/precios/existencias conocidas. No incluir datos privados en la copia pública.
+
+CU01 requiere datos de empresa y administrador inicial; CU02, plan/fechas/motivo y capacidades efectivas; CU13, registro de cliente o login por empresa; CU15, sucursales/tarifas autorizadas. Antes de fijar los campos concretos, cotejar sus schemas actuales y exportar OpenAPI desde el código implementado; estas entradas no contienen aún JSON Schema completo de esas APIs. No asumir que un texto de intención es un endpoint listo para consumir.
+
+La reserva aceptada debe devolver vencimiento y referencia central consultable; una copia descargada de CU18 no confirma una cancelación. Añadir ejemplos reales de aceptación, rechazo, conflicto y reintento a partir de la implementación, sin secretos ni datos personales reales.
