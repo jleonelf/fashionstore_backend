@@ -1,118 +1,55 @@
-# Payloads de integración propuestos
+# Payloads, DTO y ejemplos propuestos
 
-Versión 0.2.0. Son ejemplos normativos de **forma y significado**, con UUID/fechas/importes ilustrativos. No prueban que la ruta exista. Los campos de identidad en el cuerpo se contrastan con sesión, empresa y rol. Salvo indicación, cada escritura usa `Idempotency-Key` UUID, y un reintento idéntico conserva efecto y respuesta. Las operaciones de sincronización usan su `operacion_id` como clave estable.
+Los ejemplos sintéticos de sincronización están en [ejemplos-contrato.json](ejemplos-contrato.json). `operacion.schema.json` y `resultado.schema.json` cubren el sobre de sincronización; los DTO HTTP siguientes concretan las fichas sin declarar rutas implementadas. JSON Schema no valida stock, permisos, sumas financieras o tiempo real. Fechas: ISO 8601 con zona; IDs: UUID; importes: cadena decimal de dos posiciones; tasa positiva como cadena decimal. No aceptar `float`, PAN/CVC, importe de Stripe calculado por cliente ni estado `PAGADO` enviado por cliente.
 
-## Reserva diferida
+## Sobre HTTP y autoridad
 
-`POST /sincronizacion/operaciones`:
+En mutaciones comerciales propuestas, `Idempotency-Key` es UUID estable por intención y `revision` es entero >=1 para recursos existentes. Repetir clave y cuerpo devuelve el resultado autorizado; distinta carga con misma clave da `409 OPERACION_MODIFICADA`. `empresa_id` del body, cuando aparece en sincronización, se compara con sesión y recurso; jamás concede acceso. `401` requiere sesión, `403` deniega ámbito/rol/plan, `404` oculta recurso ajeno, `409` expresa revisión o estado incompatible y `422` campo inválido. `503`/timeout deja operación consultable; no autoriza crear otro pago. El webhook Stripe usa firma del proveedor y deduplicación de evento, no `Idempotency-Key` de cliente. Estos códigos concretan `interfaz.json`; cada ficha añade errores de negocio.
 
-```json
-{
-  "version_esquema": 1,
-  "operacion_id": "10000000-0000-4000-8000-000000000001",
-  "tipo": "SOLICITAR_RESERVA",
-  "creada_local_en": "2026-10-18T10:00:00-04:00",
-  "empresa_id": "20000000-0000-4000-8000-000000000001",
-  "usuario_id": "30000000-0000-4000-8000-000000000001",
-  "dispositivo_id": "40000000-0000-4000-8000-000000000001",
-  "secuencia_local": 1,
-  "referencia_horaria_id": "50000000-0000-4000-8000-000000000001",
-  "datos": {
-    "sucursal_id": "60000000-0000-4000-8000-000000000001",
-    "visita_en": "2026-10-18T14:00:00-04:00",
-    "lineas": [{"variante_id": "70000000-0000-4000-8000-000000000001", "cantidad": 1}]
-  }
-}
-```
+| CU | Solicitud propuesta (obligatorios; `?` opcionales) | Respuesta mínima y regla |
+|---|---|---|
+| 01 | `POST /empresas`: `razon_social:string`, `nombre_comercial:string`, `empresa_codigo:string`, `administrador:{nombre:string,correo:string,credencial_inicial:string}` | `empresa_id`, `empresa_codigo`, `administrador_id`, `estado`, `suscripcion_pendiente:true`; crear ambas entidades atómicamente, `409` código duplicado |
+| 02 | `POST /empresas/{empresa_id}/suscripciones`: `plan_id:UUID`, `inicio_en`, `vence_en`, `motivo:string`, `revision:int` | `suscripcion_id`, `revision`, `estado_efectivo`, `gracia_hasta`, `capacidades`, `limite_sucursales_activas`; `409` si reducción excede activas |
+| 03 | `GET /catalogo/descarga?empresa_codigo=...&version_conocida=...` | `empresa_id`, `version`, `generado_en`, `sucursales[]`, `productos[]`, `variantes[]`, `colores[]`, `promociones[]`; copia consistente, sin costos ni usuarios |
+| 04 | `POST /sincronizacion/operaciones`: sobre `SOLICITAR_RESERVA` v1; `datos:{sucursal_id,visita_en,lineas:[{variante_id,cantidad}]}` | `operacion_id`, `estado`, `codigo`, `revision`; al aceptar, `recurso_id`, `vence_en`; no stock reservado al guardar localmente |
+| 05 | Sobre `SOLICITAR_COMPRA` v2; `datos:{sucursal_id,modalidad:RECOJO|DELIVERY,direccion?,lineas:[{variante_id,cantidad,precio_visto_bob}]}` | Resultado durable con `pedido_id`, `revision`, estado de solicitud/oferta; nunca confirma pago ni stock. Precio diferente: `REQUIERE_ACEPTACION_PRECIO` y oferta versionada |
+| 06 | `POST /cajas/turnos`: `caja_id`, `dispositivo_id`, `sucursal_id`, `cupos:[{variante_id,cantidad}]`, `revision` | `turno_id`, `habilitacion_id`, `inicio_en`, `vence_en`, `version_precios`, `cupos[]`, snapshot íntegro; todo o nada, `409 CUPO_INSUFICIENTE` |
+| 07 | Sobre `REGISTRAR_VENTA_CAJA` v1; `datos:{turno_id,habilitacion_id,version_precios,vendida_local_en,entregada_local_en,lineas:[{variante_id,cantidad,precio_autorizado_bob}],total_bob,efectivo_recibido_bob,cambio_entregado_bob?,cliente_id?}` | Comprobante local antes de envío; central `venta_id`, `REGISTRADA_CENTRAL` o `CONCILIACION_REQUERIDA`. `efectivo_recibido_bob = total_bob + cambio_entregado_bob`; sin cambio, usar `0.00` |
+| 08 | `POST /cambios`: `venta_id`, `unidades_originales:[{detalle_venta_id,cantidad}]`, `reemplazos:[{variante_id,cantidad}]?`, `sucursal_id`, `modalidad_reemplazo:RECOJO|DELIVERY`, `direccion?`, `motivo`, `revision` | `cambio_id`, `nota_codigo`, `estado`, `valor_reconocido_bob`, `diferencia_bob` firmada, `vence_espera_en?`, `oferta_revision?`; entregar solo tras liquidar |
+| 09 | `POST /ventas/{venta_id}/aplicar-saldo` o `/compras/{pedido_id}/aplicar-saldo`: `importe_bob`, `revision` | `movimiento_id`, `saldo_disponible_bob`, `saldo_retenido_bob`, `restante_por_pagar_bob`; cuenta por cliente/empresa, débito único |
+| 10–11 | Entrenar: `periodo_inicio`, `periodo_fin`, `origen_datos:SINTETICO|REAL`, `semilla:int` si sintético, parámetros validados; consultar con periodo/semana y `version_modelo?` | `dataset_version`, `modelo_version`, `metricas`, `origen_datos`; CU10 predicciones por producto/sucursal/semana, CU11 grupos con productos y centroide; insuficiencia explícita |
+| 12 | `POST /plataforma/tasas-cambio`: `tasa_bob_por_usd`, `vigente_desde`, `vigente_hasta?`, `motivo` | `tasa_id`, `version`, vigencia; impedir intervalos efectivos solapados |
+| 13–15 | `POST /clientes|/sesion`: `empresa_codigo`, credenciales según operación; usuarios/sucursales conservan DTO heredados, añadiendo ámbito y `revision` | Sesión con `sub`, `empresa_id`, `ambito`, `rol`, `capacidades`, `ultimo_login_online_en`, `privada_hasta`; jamás usar rol solicitado en registro público |
+| 16–18 | Lecturas: filtros acotados, empresa derivada; reserva online conserva `sucursal_id`, `visita_en`, líneas e `Idempotency-Key` | Página/filtrado y disponibilidad conocida, nunca promesa de stock offline; reserva incluye `origen_plazo_en`, `vence_en`, estado y revisión |
+| 19–20 | Venta presencial conserva `VentaPresencialCrearDTO`; devolución: `venta_id`, `unidades:[{detalle_venta_id,cantidad}]`, `motivo`, `revision`; merma: sucursal/variante/cantidad/motivo | Venta, pago y entrega desglosados; devolución separa inspección/inventario de resolución financiera; no crear reembolso por recepción sola |
+| 21 | `POST /carritos/mio/checkout`: `sucursal_id`, `modalidad`, `direccion?`, `saldo_solicitado_bob?`; líneas provienen de carrito propio. Oferta se acepta con `oferta_revision` | `pedido_id`, `oferta_revision`, `base_bob`, `descuento_bob`, `envio_bob`, `total_bob`, `vence_en`, `estado_pago`, `estado_cumplimiento`; no aparta stock antes de CU22 |
+| 22 | `POST /pagos/stripe/intenciones`: `contexto:PEDIDO|CAMBIO|RESERVA`, `recurso_id`, `oferta_revision`, clave idempotente; monto se deriva de oferta/obligación | `orden_pago_id`, `estado`, `importe_bob`, `importe_usd`, `centavos_usd:int`, `tasa_id`, `client_secret` solo a dueño autorizado; webhook/consulta proveedor confirma, luego asignar o CU27 |
+| 23–25 | Dashboard y ventas: `desde`, `hasta`, `sucursal_id?`, `fecha_base:CENTRAL|LOCAL`; reporte: `texto`, `tipo_reporte?`, `filtros?`; exportar: `consulta_id`, `formato:CSV|XLSX|PDF` | `filtros_efectivos`, `calculado_en/generado_en`, definiciones y totales; reporte usa mismo `consulta_id`/snapshot en pantalla y exportación |
+| 26 | Job interno sin actor humano; `ahora_servidor` y lote controlado por backend | `procesadas`, `omitidas`, `incidencias`, referencias de reservas vencidas; repetición sin doble liberación |
+| 27 | `POST /reembolsos`: `origen:PEDIDO_NO_CUMPLIBLE|DEVOLUCION|CAMBIO`, `recurso_id`, `motivo`, `revision`; `pago_id?` solo si hay componente capturado; unidades/importes elegibles los calcula servidor | `reembolso_id`, `estado`, `importe_bob`, `centavos_usd?`, `saldo_restaurado_bob?`, `medio`, `referencia_externa?`, `revision`; obligación única por causa/unidad/componente; `COMPLETADO` solo con evidencia de salida |
 
-Aceptada: `{"operacion_id":"10000000-0000-4000-8000-000000000001","estado":"ACEPTADA","codigo":"OK","recibida_en":"2026-10-18T10:02:00-04:00","aceptada_en":"2026-10-18T10:02:00-04:00","recurso_id":"80000000-0000-4000-8000-000000000001","detalle":"Reserva aceptada"}`. Vencida o sin stock: HTTP 200, `estado=RECHAZADA`, código respectivo, sin `recurso_id`. Incoherencia temporal: HTTP 200, `estado=CONFLICTO`, `codigo=TIEMPO_INCOHERENTE`, resultado durable sin apartado ni `recurso_id`. `GET /sincronizacion/operaciones/{operacion_id}` devuelve la misma respuesta durable al dueño autenticado.
+## Variantes de contrato y compatibilidad
 
-## Compra diferida y pago
+`SOLICITAR_COMPRA` v1 conserva UUID, hash y resultado previos. Un reenvío v1 no activa v2 ni crea cobro. La compra nueva v2 registra solicitud; `POST /compras/{pedido_id}/aceptar-oferta` debe llevar `oferta_revision` y `revision` del pedido, y devolver oferta aceptada con total/tasa congelados y estado `PENDIENTE_PAGO`. El consentimiento de pago se produce después en CU22 online. Si oferta caduca antes de iniciar pago, generar una nueva oferta y pedir nueva aceptación; si el pago ya se inició, conciliarlo. `GET /compras/{pedido_id}` expone por separado `estado_pago`, `estado_cumplimiento`, `oferta_revision`, `reembolso_id?` y `revision`.
 
-La compra usa el mismo envoltorio con `tipo=SOLICITAR_COMPRA` y `datos`:
+La ruta heredada `PATCH/DELETE /carritos/mio/lineas/{variante_id}` sigue usando `variante_id`. `interfaz.json` propone `{linea_id}` para el contrato nuevo: un adaptador debe exponer ambos o modificar cliente y servidor juntos; no afirmar que ya coinciden. Análogamente `IntencionCrearDTO{venta_id}` y `GET /pagos/stripe/estado/{venta_id}` siguen siendo heredados. El recurso generalizado de CU22 necesita discriminador `contexto` para impedir que un UUID de cambio o reserva se interprete como venta.
 
-```json
-{
-  "sucursal_id": "60000000-0000-4000-8000-000000000001",
-  "lineas": [{"variante_id": "70000000-0000-4000-8000-000000000001", "cantidad": 1, "precio_visto_bob": "120.00"}]
-}
-```
+## Mutaciones secundarias y resolución de conflictos
 
-Stock agotado: `estado=RECHAZADA`, `codigo=SIN_STOCK`, `faltantes=[{"variante_id":"...","cantidad_solicitada":1}]`; cliente muestra «Lo sentimos, el producto no se encuentra disponible». Precio cambiado: `estado=REQUIERE_ACEPTACION_PRECIO`, `codigo=PRECIO_CAMBIADO`, `revision`, `total_bob`, sin intención Stripe. `POST /compras/{operacion_id}/aceptar-precio`:
+| Ruta propuesta | Entrada / autoridad | Salida o conflicto |
+|---|---|---|
+| `POST /compras/{pedido_id}/aceptar-oferta` | Cliente propietario, `oferta_revision:int`, `revision:int` del pedido, `Idempotency-Key`; monto no modificable por cliente | Oferta inmutable aceptada, importes/tasa congelados, `PENDIENTE_PAGO`; `409` por revisión u oferta caducada |
+| `POST /cambios/{cambio_id}/aceptar-oferta` | Cliente propietario, `oferta_revision`, `revision`, clave; si diferencia a favor, `destino:SALDO|REEMBOLSO` elegido explícitamente | Revisión y resolución única; `409` si oferta caducó, nota resuelta o unidades ya liquidadas |
+| `POST /cambios/{cambio_id}/resolver-espera` | Cliente propietario, `revision`, `destino:OTRA_PRENDA|SALDO|REEMBOLSO`, `alternativa_variante_id?` obligatoria para `OTRA_PRENDA`, clave | Nueva búsqueda/oferta o resolución financiera elegida; no cerrar nota por vencimiento sin registrar elección |
+| `POST /cambios/{cambio_id}/confirmar` y `/entregas` | Personal de sucursal autorizado, `revision`, referencia de pago confirmado/resolución, entrega física y comprobante; dirección/tarifa aceptada si delivery | Confirmación/entrega solo tras liquidación; `409` ante pago incierto o reemplazo no asignado |
+| `POST /devoluciones/solicitudes` | Cliente propietario, `venta_id`, `unidades:[{detalle_venta_id,cantidad}]`, `motivo`, clave; no afirma recepción física | `devolucion_id`, estado `SOLICITADA`, revisión y política aplicada; `409` por unidades previamente comprometidas |
+| `POST /devoluciones/{devolucion_id}/inspecciones` | Encargado, `revision`, líneas inspeccionadas con `cantidad_aceptada`, `cantidad_rechazada`, `condicion`, `motivo`; total por línea igual a recibido | Estado físico/importe elegible calculado en servidor, movimiento único; no crea automáticamente reembolso completado |
+| `POST /cajas/turnos/{turno_id}/cerrar` | Personal autorizado, `revision`, `ultima_secuencia_local`, UUID de operaciones aún pendientes, arqueo en BOB, clave | `CERRADO` solo al conciliar todas las ventas; si faltan operaciones, `CONCILIACION` con UUID faltantes, sin liberar cupo consumido |
+| `POST /cajas/turnos/{turno_id}/recuperar` | Encargado/administrador de la empresa, `revision`, `motivo`, evidencia mínima del dispositivo/caja perdida y clave | Incidencia y cupos congelados hasta conciliación; nunca crear un segundo turno con cupo duplicado |
+| `POST /reembolsos/{reembolso_id}/autorizar` | Encargado/administrador habilitado, `revision`, `motivo`, clave; autoautorización de pedido no cumplible solo por trabajo interno | Obligación `AUTORIZADO` con desglose por medio original; `409` si supera captura disponible |
+| `POST /reembolsos/{reembolso_id}/ejecutar` y `/conciliar` | Proceso backend/tesorería autorizada, `revision`, clave estable de ejecución; el cliente nunca envía referencia Stripe ni estado `COMPLETADO` | `EN_PROCESO/EN_VERIFICACION/COMPLETADO/FALLIDO`, evidencia de proveedor o egreso efectivo; timeout conserva obligación y bloquea otro desembolso |
+| `POST /reportes/consultar` y `/exportar` | Administrador empresarial Profesional, `consulta_id`, `formato` solo para exportar; filtros efectivos congelados en consulta | Mismo snapshot, columnas y totales; `404` si fuera de empresa, `409` si snapshot caducó según retención configurada |
 
-```json
-{"revision": 2, "total_bob": "125.00"}
-```
+`POST /sincronizacion/referencias-horarias` propuesto recibe sesión autenticada, `dispositivo_id:UUID`, `hora_local_en:date-time` y clave idempotente. Devuelve `referencia_horaria_id:UUID`, `hora_central_en:date-time`, `valida_hasta:date-time` y ámbito actor/empresa/dispositivo; la referencia se guarda en servidor. `referencia_horaria_id` sigue opcional en el sobre v1 por compatibilidad. Para CU04 el servidor contrasta `creada_local_en` con una referencia válida de ese ámbito, incluida la ya asociada al dispositivo si el cliente v1 omite el ID; si no existe una referencia comprobable o el reloj es incoherente, guarda `CONFLICTO/TIEMPO_INCOHERENTE` sin apartar stock. La tolerancia se configura y se registra; ningún cliente puede autoemitir la referencia. Así se conserva el payload v1 y el origen local acordado sin confiar ciegamente en la hora del dispositivo.
 
-El backend revalida stock y revisión. Si todo sigue vigente responde `estado=PENDIENTE_PAGO`, `codigo=OK`, `venta_id`, `aceptada_en`, `total_bob`, `revision` y vencimiento del apartado; el apartado dura 60 minutos desde esa aceptación. Si cambió otra vez, devuelve precio/revisión nuevos sin cobrar. El cliente aplica saldo online si lo elige y confirma el importe restante. Solo entonces invoca el `POST /pagos/stripe/intenciones` existente con `venta_id` y muestra BOB, tasa BOB/USD y USD de la intención antes de confirmar. `GET /pagos/stripe/estado/{venta_id}` da el estado final confirmado por webhook/reconciliación; el retorno de Stripe no marca `PAGADA` por sí solo.
-
-## Turno y venta de caja
-
-`POST /cajas/turnos` (cajero/administrador de sucursal):
-
-```json
-{
-  "caja_id": "90000000-0000-4000-8000-000000000001",
-  "sucursal_id": "60000000-0000-4000-8000-000000000001",
-  "cupos_solicitados": [{"variante_id": "70000000-0000-4000-8000-000000000001", "cantidad": 2}]
-}
-```
-
-Respuesta 201: `turno_id`, `habilitacion_id`, `autorizada_en`, `vence_en` (ocho horas), `version_precios`, `cupos_concedidos` y `precios_autorizados` por variante/promoción. Solo se inicia venta offline tras guardar durablemente esta respuesta. Cada venta local pasa al comando `REGISTRAR_VENTA_CAJA` con `datos`:
-
-```json
-{
-  "turno_id": "a0000000-0000-4000-8000-000000000001",
-  "habilitacion_id": "b0000000-0000-4000-8000-000000000001",
-  "version_precios": "turno-1",
-  "vendida_local_en": "2026-10-18T11:00:00-04:00",
-  "entregada_local_en": "2026-10-18T11:01:00-04:00",
-  "lineas": [{"variante_id": "70000000-0000-4000-8000-000000000001", "cantidad": 1, "precio_autorizado_bob": "120.00"}],
-  "total_bob": "120.00",
-  "efectivo_recibido_bob": "120.00"
-}
-```
-
-Si se recibe más efectivo, el cuerpo añade `cambio_entregado_bob`; su diferencia con `efectivo_recibido_bob` debe ser `total_bob`.
-
-La respuesta central usa `estado=REGISTRADA_CENTRAL`, `codigo=OK`, `venta_id`, `aceptada_en` o `estado=CONCILIACION_REQUERIDA` con detalle de incidencia. Esta última **no** borra el registro local de efectivo/entrega. Cierre `POST /cajas/turnos/{turno_id}/cerrar` con `{ "revision": 3, "operaciones_sincronizadas": ["10000000-0000-4000-8000-000000000003"] }`; responde cupos usados/liberados y referencia de auditoría. Recuperación por pérdida de caja requiere ruta y operación supervisada de conteo, con actor, motivo, cantidades físicas y evidencia; no puede ser automática.
-
-## Cambios, saldo y tasa
-
-`POST /cambios`:
-
-```json
-{
-  "venta_id": "c0000000-0000-4000-8000-000000000001",
-  "sucursal_id": "60000000-0000-4000-8000-000000000001",
-  "unidades_devueltas": [{"linea_venta_id": "d0000000-0000-4000-8000-000000000001", "cantidad": 1}],
-  "reemplazos": [{"variante_id": "70000000-0000-4000-8000-000000000002", "cantidad": 1}]
-}
-```
-
-Respuesta: `cambio_id`, `revision`, `valor_reconocido_bob`, `valor_reemplazo_bob`, `diferencia_bob`, `sentido_diferencia` (`CLIENTE_PAGA`, `SALDO_CLIENTE`, `SIN_DIFERENCIA`), estado y vencimiento del apartado de reemplazo. `POST /cambios/{id}/confirmar` recibe revisión aceptada y medio de pago; solo confirma entrega cuando diferencia a cargo del cliente está pagada. Si es favorable al cliente emite un movimiento de saldo personal una vez. `GET /saldos/mio` devuelve `{ "empresa_id": "...", "cliente_id": "...", "disponible_bob": "15.00", "movimientos": [...] }`; cada movimiento incluye ID, tipo, importe BOB, fecha y referencia. `POST /ventas/{id}/aplicar-saldo` recibe `{ "importe_bob": "10.00", "revision": 2 }` y responde importe reservado/usado/restante; saldo offline no se gasta.
-
-`POST /plataforma/tasas-cambio` registra `{ "bob_por_usd": "6.9600", "vigente_desde": "...", "vigente_hasta": "...", "motivo": "..." }`. La cifra aquí es **ilustrativa**, no una cotización inicial aprobada. Una intención Stripe conserva `tasa_version`, `bob_por_usd`, `total_bob`, `total_usd`, fecha y redondeo. La configuración real debe cargarse antes de cobrar.
-
-## Reportes, ML y notificaciones
-
-`POST /reportes/consultar` y `/reportes/exportar` comparten consulta tipada:
-
-```json
-{
-  "tipo": "VENTAS_SUCURSAL_PERIODO",
-  "filtros": {"desde": "2026-10-01", "hasta": "2026-10-31", "sucursal_id": "60000000-0000-4000-8000-000000000001", "fecha_base": "ACEPTACION_CENTRAL"}
-}
-```
-
-Tipos: `VENTAS_SUCURSAL_PERIODO`, `PRODUCTOS_MAS_MENOS`, `EVOLUCION_SEMANAL`, `VENTAS_CATEGORIA`. Respuesta común: `tipo`, `filtros_aplicados`, `generado_en`, `columnas`, `filas`, `totales` (`brutas_bob`, `descuentos_bob`, `cambios_devoluciones_bob`, `netas_bob`, `saldo_emitido_bob`, `saldo_usado_bob`). Exportar añade `formato` (`excel`, `csv`, `pdf`) y produce archivo del mismo conjunto de datos. `POST /reportes/interpretar` recibe `{ "texto": "..." }` (texto escrito o transcrito en web); devuelve `tipo` y filtros propuestos para revisión antes de consultar. Gemini nunca envía SQL ejecutable.
-
-`GET /analitica/pronosticos` devuelve producto/sucursal, semana prevista, unidades, versión, periodo de entrenamiento, evaluación y origen de datos. `GET /analitica/grupos-productos` devuelve grupo, productos, rasgos y versión/métrica. Ambos responden `DATOS_INSUFICIENTES` en vez de inventar resultados cuando aplica. `GET /notificaciones/mias` devuelve elementos con `notificacion_id`, `tipo`, `recurso_id`, `creada_en`, `leida_en` opcional y enlace interno autorizado; FCM/Web Push transportan el ID, no el estado final ni datos sensibles. Los clientes reconsultan autenticados al abrir un aviso.
-
-## Ejemplos y contratos que debe cerrar la primera presentación
-
-La reserva diferida y su resultado de las secciones anteriores corresponden al actual CU04. TIEMPO_INCOHERENTE usa CONFLICTO; no se descarta el registro. La descarga CU03 debe exponer empresa/ámbito, fecha/versión y productos/variantes/precios/existencias conocidas. No incluir datos privados en la copia pública.
-
-CU01 requiere datos de empresa y administrador inicial; CU02, plan/fechas/motivo y capacidades efectivas; CU13, registro de cliente o login por empresa; CU15, sucursales/tarifas autorizadas. Antes de fijar los campos concretos, cotejar sus schemas actuales y exportar OpenAPI desde el código implementado; estas entradas no contienen aún JSON Schema completo de esas APIs. No asumir que un texto de intención es un endpoint listo para consumir.
-
-La reserva aceptada debe devolver vencimiento y referencia central consultable; una copia descargada de CU18 no confirma una cancelación. Añadir ejemplos reales de aceptación, rechazo, conflicto y reintento a partir de la implementación, sin secretos ni datos personales reales.
+El estado del sobre `resultado.schema.json` describe la aceptación/reconciliación de una operación, no sustituye el estado posterior de pedido/pago/reembolso. `REEMBOLSO_PENDIENTE` y `REEMBOLSADO` solo proceden después de comprobar captura y obligación/ejecución reales, respectivamente. La primera respuesta de sincronización nunca muestra `PAGADO` porque una compra estaba en cola. Aplican las transiciones de [estados-y-transiciones.md](estados-y-transiciones.md).

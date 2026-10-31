@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://fashionstore.local/contratos/segundo-parcial/0.2.0/operacion.schema.json",
+  "$id": "https://fashionstore.local/contratos/segundo-parcial/0.3.0/operacion.schema.json",
   "title": "Operación de sincronización FashionStore",
   "type": "object",
   "required": [
@@ -16,7 +16,10 @@
   ],
   "properties": {
     "version_esquema": {
-      "const": 1
+      "enum": [
+        1,
+        2
+      ]
     },
     "operacion_id": {
       "type": "string",
@@ -105,6 +108,59 @@
           }
         }
       }
+    },
+    {
+      "if": {
+        "properties": {
+          "version_esquema": {
+            "const": 2
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "tipo": {
+            "const": "SOLICITAR_COMPRA"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "tipo": {
+            "const": "SOLICITAR_COMPRA"
+          },
+          "version_esquema": {
+            "const": 2
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "datos": {
+            "required": [
+              "modalidad"
+            ],
+            "allOf": [
+              {
+                "if": {
+                  "properties": {
+                    "modalidad": {
+                      "const": "DELIVERY"
+                    }
+                  }
+                },
+                "then": {
+                  "required": [
+                    "direccion"
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      }
     }
   ],
   "$defs": {
@@ -180,6 +236,17 @@
               }
             }
           }
+        },
+        "modalidad": {
+          "enum": [
+            "RECOJO",
+            "DELIVERY"
+          ]
+        },
+        "direccion": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500
         }
       }
     },
@@ -225,6 +292,10 @@
         "cambio_entregado_bob": {
           "$ref": "#/$defs/importe"
         },
+        "cliente_id": {
+          "type": "string",
+          "format": "uuid"
+        },
         "lineas": {
           "type": "array",
           "minItems": 1,
@@ -251,5 +322,6 @@
       "type": "string",
       "pattern": "^(0|[1-9][0-9]*)\\.[0-9]{2}$"
     }
-  }
+  },
+  "$comment": "v1 se conserva para cola existente; SOLICITAR_COMPRA v1 no se convierte en cobro automático. v2 compra usa semántica A-PAGO-01 y requiere consentimiento online posterior."
 }

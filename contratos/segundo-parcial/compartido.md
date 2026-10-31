@@ -1,83 +1,37 @@
-# Contrato compartido de API y sincronización
+# Contrato transversal 0.3.0
 
-**Estado:** diseño de sincronización para reservas, compras y caja, con detalle prioritario de los ocho casos de la primera presentación. No equivale al OpenAPI real. Ver [casos-de-uso.md](casos-de-uso.md), [primera-presentacion.md](primera-presentacion.md) y [reglas-aprobadas.md](reglas-aprobadas.md).
+Leer [decisiones-0.3.0.md](decisiones-0.3.0.md), [integracion.md](integracion.md) y las fichas de [casos-de-uso.md](casos-de-uso.md).
 
-## Identidad y versión
+## Invariantes
+- Empresa se deriva de sesión y autorización; parámetros/body identifican recursos, no otorgan acceso. Verificar cada FK y ámbito de empresa, usuario y sucursal. Plataforma tiene ámbito separado.
+- Fechas ISO8601 con zona; almacenar timestamptz UTC y mostrar zona de empresa, inicialmente America/La_Paz. Reloj local no gobierna autorización central sin referencia verificada.
+- UUID para recursos/comandos; correos normalizados únicos por empresa; códigos públicos únicos globalmente. No renumerar IDs persistidos por numeración académica.
+- Importes BOB/USD como cadenas decimales, PostgreSQL NUMERIC, Decimal en backend. Centavos de proveedor como enteros. HALF_UP a dos decimales; precio/tasa congelados por operación.
+- Cantidad positiva entera; importes no negativos salvo diferencia firmada del cambio. Total = base - descuentos + envío; adelanto/saldo son medios aplicados, no descuento comercial duplicado.
+- Unidades entregadas = base de elegibilidad; devueltas/cambiadas/bloqueadas no se usan otra vez. Reembolso de dinero no altera inventario automáticamente.
+- Stock libre = existencia física - reservas/compromisos pendientes - cupos offline no liquidados, con categorías excluyentes. Sincronizar venta de cupo reduce físico y cupo consumido sin doble descuento del libre.
+- Cantidades físicas vendidas no pueden ser negativas. Preparar lote de movimientos y referencias de negocio en una transacción, con bloqueo estable por empresa/sucursal/variante.
+- Suma de devoluciones financieras reservadas/ejecutadas <= componentes originales disponibles; saldo se restaura sin conversión a efectivo.
 
-- Todas las operaciones privadas requieren sesión/identidad válida. El backend deriva `empresa_id` del usuario autenticado y comprueba la pertenencia de cada recurso, sucursal y cliente. Los identificadores de empresa incluidos en comandos son referencias de comprobación, nunca autorización suficiente.
-- El enlace público de navegación propuesto `/tienda/{empresa_codigo}` identifica únicamente el catálogo de una empresa. Su código se conserva al pasar a registro/login, pero no sustituye la pertenencia validada ni permite reutilizar silenciosamente la sesión de otra empresa. La pantalla inicial para escoger empresas queda como mejora opcional posterior, no forma parte de los ocho casos.
-- Los datos privados del cliente se muestran offline durante 8 h desde el último login online. Al vencer o hacer logout se ocultan, manteniendo aislados por empresa/usuario los datos, pendientes y resultados hasta reautenticar; el catálogo público descargado puede seguir visible. Recuperar red o reintentar no reinicia esa ventana. Es independiente del JWT actual de 24 h y de la habilitación de caja offline de 8 h. Un token vencido nunca queda habilitado por la ventana local; sincronizar exige identidad online válida y autorización backend.
-- `version_esquema` identifica la forma del comando. Cambios incompatibles producen versión nueva y migración local; no reinterpretar silenciosamente pendientes antiguos.
-- Cada comando tiene `operacion_id` UUID estable, `tipo`, `creada_local_en`, `empresa_id`, `usuario_id`, `dispositivo_id`, `secuencia_local` y `datos` tipados. Caja añade `turno_id`, `habilitacion_id`, versión de precios y cupos consumidos. El servidor conserva hash canónico del comando y respuesta.
-- Repetir mismo `operacion_id` y contenido devuelve el mismo resultado tras reautorizar actor y empresa. Mismo ID con contenido diferente devuelve conflicto `OPERACION_MODIFICADA`. Los reintentos no cambian la fecha original ni prolongan vencimientos.
-- El resultado contiene `operacion_id`, `estado`, `codigo`, `recibida_en`, `aceptada_en` si aplica, `recurso_id` si aplica, `revision` y detalle legible. La pérdida de respuesta se resuelve consultando por ID, no enviando una nueva operación con otro ID.
+## Mutaciones, fallos y concurrencia
+Idempotency-Key UUID obligatorio para mutaciones comerciales, altas, liquidaciones, pagos y reembolsos. Ámbito (empresa, actor, tipo, clave) y hash canónico del cuerpo. Misma clave/contenido recupera resultado; clave con contenido distinto 409 OPERACION_MODIFICADA. No reutilizar la clave para nueva oferta/revisión. Secuencia de transición se valida bajo bloqueo y revision/If-Match lógico. Lecturas GET no requieren clave.
 
-## Familias de operaciones
+El webhook Stripe es una entrada firmada del proveedor: se autentica por firma/cuerpo y se deduplica por identificador de evento, sin header `Idempotency-Key` del cliente. Los trabajos internos (expiración, conciliación y outbox) usan clave de trabajo/recurso y transición, no sesión de un actor humano. `GET /carritos/mio` heredado puede crear el carrito en el servidor; su repetición no debe duplicarlo y se preserva compatibilidad.
 
-| Tipo lógico | Origen y datos mínimos | Efecto central |
-|---|---|---|
-| `SOLICITAR_RESERVA` | Cliente PWA/Flutter: sucursal, visita, variantes/cantidades y fecha local | Revalidar tiempo, identidad y stock; aceptar y reservar o rechazar/conflicto. |
-| `SOLICITAR_COMPRA` | Cliente PWA/Flutter: sucursal elegida, líneas y precios vistos | Revalidar total y stock; pedir aceptación de precio si cambió, o apartar 60 min y ofrecer pago online. |
-| `REGISTRAR_VENTA_CAJA` | Caja PWA/Flutter: turno, habilitación, líneas, precio autorizado, total BOB, efectivo/entrega y cupo consumido | Registrar venta/pago/Kardex contra cupo asignado; auditar incidencias. |
+Revisiones monótonas por agregado. Confirmar empresa y permisos antes de devolver resultado previo. Error de transporte no prueba rechazo ni no ejecución: conservar comando y consultar resultado. 401: reautenticar; 403: no reintentar sin resolver permiso; 409: conciliar revisión; 422: corregir; 503/timeout: consultar y reintentar misma operación.
 
-Esta versión transporta **un comando por solicitud** y cada comando tiene transacción y resultado independiente. Las colas cliente envían operaciones en orden; un rechazo no revierte otras operaciones ya aceptadas. No mezclar ventas físicas cobradas con solicitudes digitales pendientes de pago. Los comandos cliente se envían solo después de reautenticación online; la caja envía ventas realizadas bajo habilitación original y el backend audita revocaciones posteriores.
+No hay transacción SQL que incluya Stripe. Persistir orden/intención local y evento durable antes de llamada externa; reconciliador tolera caída antes/después de proveedor. Clave externa estable por orden. Registrar IDs de eventos y deduplicar; no retroceder estado final por webhook antiguo. Pago/reembolso incierto bloquea nueva ejecución equivalente hasta conocer resultado. No guardar secretos de tarjetas ni client_secret en logs.
 
-La reserva online vence a las 24 h desde creación central; la offline aceptada, a las 24 h desde creación local original. Un adelanto confirmado online antes del vencimiento fija 72 h desde ese mismo origen, sin sumar 72 h. Fecha de visita, recepción, reintentos y notificaciones no cambian el origen. Una solicitud offline que llega vencida es `RECHAZADA`/`SOLICITUD_VENCIDA` sin apartado; si el tiempo no es verificable, `CONFLICTO`/`TIEMPO_INCOHERENTE` durable. Creación, adelantos, cancelación y expiración deben usar la misma regla y exponer fechas coherentes en los clientes.
+## Privacidad y almacenamiento local
+Catálogo público separado por empresa. Información privada separada por empresa/usuario/dispositivo; visible 8h desde login online. Logout/vencimiento oculta y bloquea acciones privadas, conserva pendientes para recuperar con identidad original. No dar resultados privados de otra cuenta. Turno caja8h es autorización específica distinta de JWT24h y privacidad8h. Si vence sesión online, no sincronizar hasta revalidar.
 
-## Estados visibles
+IndexedDB y SQLite: transacción local de cabecera/detalle/cola/cupo; estados PENDIENTE_ENVIO, ENVIANDO, RESULTADO_RECIBIDO, REQUIERE_ACCION. Reinicio recupera ENVIANDO como pendiente de consulta sin nuevo UUID. No borrar por haber enviado ni por recibir push. Política de retención por confirmar antes de purgar: no purgar pendientes o obligaciones financieras abiertas.
 
-| Flujo | Estados locales/centrales principales |
-|---|---|
-| Reserva | `GUARDADA_LOCAL`, `PENDIENTE_ENVIO`, `EN_REVISION`, `ACEPTADA`, `RECHAZADA`, `CONFLICTO`. Solo `ACEPTADA` aparta stock. |
-| Compra digital | `GUARDADA_LOCAL`, `PENDIENTE_ENVIO`, `REQUIERE_ACEPTACION_PRECIO`, `SIN_STOCK`, `PENDIENTE_PAGO`, `PAGO_EN_VERIFICACION`, `PAGADA`, `PAGO_FALLIDO`, `VENCIDA`. Solo webhook/reconciliación confiable confirma `PAGADA`. |
-| Venta de caja | `BORRADOR_LOCAL`, `COBRADA_ENTREGADA_LOCAL`, `PENDIENTE_ENVIO`, `REGISTRADA_CENTRAL`, `CONCILIACION_REQUERIDA`. La etiqueta local no se presenta como confirmación central. |
+## Notificaciones y comprobantes
+Outbox en PostgreSQL junto con hecho de negocio; FCM Android/Web Push con consentimiento, bandeja durable y recuperación por cursor. Push indica cambio y abre consulta autorizada; no ejecuta pago al tocarla. Evento único por recurso/transición/revisión; reintento de entrega no duplica obligación. No prometer notificación si dispositivo no está conectado.
 
-Los nombres se precisarán en enums del backend y se exportarán una sola vez a clientes. Las transiciones permitidas deberán probarse; un aviso tardío no retrocede ni renueva un estado.
+Comprobantes operativos no fiscales: UUID/código, empresa, sucursal, usuario, fecha, referencias a venta/recepción/cambio/pago/reembolso, líneas/importes y estado local/central/pendiente/ejecutado. PDF/consulta recuperable según caso. No afirmar devolución de dinero hasta evidencia de ejecución; conservar versión inmutable y corrección por documento enlazado.
 
-## Causas de resultado y recuperación
-
-| Código | Significado y acción de interfaz |
-|---|---|
-| `SIN_STOCK` | Mostrar variantes faltantes; no cobrar ni crear reserva/venta digital parcial. |
-| `PRECIO_CAMBIADO` | Mostrar total actualizado y pedir aceptación online antes de apartar. |
-| `SOLICITUD_VENCIDA` | Reserva fuera de 24/72 h: iniciar solicitud nueva si el cliente desea continuar. |
-| `TIEMPO_INCOHERENTE` | Conservar operación en conflicto; no apartar automáticamente; mostrar revisión/renovación según contrato. |
-| `PLAN_NO_HABILITADO` | No aceptar nuevas operaciones; las ventas de caja ya realizadas válidamente se concilian y auditan. |
-| `CUPO_INSUFICIENTE` | Impedir nueva venta de caja local; una venta ya cobrada se trata mediante incidencia auditada. |
-| `TASA_NO_VIGENTE` | Impedir nueva intención Stripe, conservando pedido/stock según vencimiento original. |
-| `OPERACION_MODIFICADA` | No reaplicar; mantener original y registrar incidencia de sincronización. |
-| `PAGO_EN_VERIFICACION` | Consultar estado remoto; no afirmar éxito ni fracaso y no liberar stock prematuramente. |
-
-Los estados HTTP exactos y esquemas de error se fijarán en OpenAPI del backend, conservando estos códigos de negocio estables. Ningún cliente interpreta una falla de red como rechazo comercial.
-
-## Importes, fechas y notificaciones
-
-- BOB comercial y saldo con dos decimales. Tasa positiva BOB por USD versionada y vigente; convertir con aritmética decimal y `ROUND_HALF_UP` a USD de dos decimales. Exponer BOB, tasa, fecha de vigencia y USD final para aceptación. Webhook compara contra intención congelada. Ningún cliente calcula el monto final como autoridad.
-- En reportes, fecha predeterminada de aceptación central; fecha física local y recepción son campos separados. Solicitud de compra offline no es venta confirmada. Venta de caja cobrada localmente entra al reporte central al aceptarse, con su fecha física disponible.
-- Cada resultado central relevante persiste en bandeja propia. Android FCM y PWA Web Push son canales de aviso, no fuente del estado ni mecanismo para enviar un borrador que nunca salió del dispositivo. Abrir aviso vuelve a consultar recurso tras autenticar.
-
-## Operaciones REST a concretar sobre `/api/v1`
-
-Estas son rutas **propuestas**, nuevas o extensiones, sujetas a reconciliación con las rutas existentes al implementar:
-
-| Propósito | Ruta de diseño |
-|---|---|
-| Descargar catálogo versionado | `GET /catalogo/descarga` |
-| Enviar un comando | `POST /sincronizacion/operaciones` |
-| Obtener referencia de hora del servidor | `GET /sincronizacion/referencia-horaria` |
-| Recuperar resultado | `GET /sincronizacion/operaciones/{operacion_id}` |
-| Consultar bandeja propia | `GET /notificaciones/mias` |
-| Aceptar precio y preparar pago | `POST /compras/{operacion_id}/aceptar-precio` |
-| Consultar saldo propio | `GET /saldos/mio` |
-
-No duplicar `/reservas`, `/carritos` o `/pagos` existentes sin evaluar sus contratos y compatibilidad. OpenAPI se exporta desde FastAPI después de implementar y se compara con esta especificación.
-
-## Protocolo 0.2.0, aclaración documental 0.2.1 y alcance actual
-
-Los ocho CU de la primera presentación se detallan en [primera-presentacion.md](primera-presentacion.md). Los códigos actuales son los de [equivalencias-cu.md](equivalencias-cu.md), no los de la versión anterior. Se añade CONFLICTO al enum de resultados: TIEMPO_INCOHERENTE se conserva como conflicto durable, sin stock apartado. Los clientes deben reconocerlo antes de integrar esta versión; no es un fallo de red ni un estado de reserva aceptada.
-
-El envoltorio de operación mantiene version_esquema=1 y todos sus campos obligatorios. La renumeración es documental; no modificar UUID persistidos ni vaciar IndexedDB/SQLite. Los resultados y pendientes antiguos se preservan; coordinar actualización de validadores entre los tres repositorios. No se declara ya ejecutada una migración de clientes.
-
-Un GET de resultado sin registro visible no autoriza generar otro UUID: el POST anterior podría estar en curso. Reintentar el mismo comando/UUID es seguro solo con unicidad, serialización y transacción idempotente del backend. Evitar sincronizadores concurrentes en cliente y proteger también servidor.
-
-La venta física de contado requiere efectivo; el turno ya determina empresa/sucursal/responsable/dispositivo, que deben validarse al recibir. Para próximas presentaciones, formalizar además el campo de cliente opcional y su pertenencia, y los datos de comprobante/entrega; esta revisión no inventa nuevos campos obligatorios de caja ni la presenta como implementada.
+## Capas y funciones conservadas
+Backend modular único en app/core/modules; nueve módulos actuales y `caja_offline` como décimo paquete propuesto. Routers llaman servicios dueños; sincronizador despacha, no duplica stock/dinero. Repositorios/modelos SQLAlchemy del dueño; infraestructura transversal en core/db. Angular src/app/features y Flutter lib/features replican ámbitos según canal, no toda administración en móvil. Nuevos métodos en español, respetando firmas de SDK/framework.
+Conservar LB04/05/09/10/13/16/17/18/20/22/25 y protocolos de Decart. [funciones-conservadas.md](funciones-conservadas.md) describe sus funciones y [modelo-datos-completo.md](modelo-datos-completo.md) sus ampliaciones. No crear archivos vacíos por plantilla ni microservicios nuevos.

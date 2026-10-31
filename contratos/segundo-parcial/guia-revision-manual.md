@@ -1,33 +1,45 @@
-# Guía de revisión manual — primera presentación
+# Plan de aceptación — pendiente de ejecución
 
-Revisión documental 0.2.1 del diseño/protocolo 0.2.0. No prueba implementación. Leer README.md, primera-presentacion.md y equivalencias-cu.md antes de usar números de CU. Revisar las ocho fichas y sus paquetes; las dieciocho restantes y las once funciones LB se conservan como contexto/regresión.
+Cada CU exige prueba positiva, negativa de permiso/tenant y los escenarios específicos siguientes. Ejecutar W y M por separado cuando aplique. No marcar aprobada por lectura de código ni documentación. Automatizar reglas críticas RNF11; capturas manuales no bastan.
 
-## Revisión documental
+| CU | Escenarios mínimos |
+|---|---|
+| CU01 | Alta duplicada con misma clave no duplica empresa/administrador.; A no lee ni modifica datos privados de B. |
+| CU02 | Básico rechaza tercera activa incluso con peticiones concurrentes.; Gracia/vencimiento no impiden registrar venta offline efectuada válidamente antes. |
+| CU03 | Descarga/reinicio sin conexión permite consultar CU16.; Ningún dato de clientes, costos privados o usuarios se filtra en copia pública. |
+| CU04 | Dos envíos producen una reserva y un apartado.; Vencida localmente no obtiene 24 h nuevas al sincronizar. |
+| CU05 | Pedido cobrado sin stock conserva pago y genera un único reembolso íntegro.; Fallo o reintento no repite cobro, asignación, reembolso ni notificación. |
+| CU06 | Dos cajas concurrentes no reciben la misma unidad.; Flutter y PWA aplican mismo negocio y conservan habilitación al reiniciar. |
+| CU07 | Reinicio no pierde venta/efectivo/cupo; reenvío no duplica Kardex.; Caja perdida no libera stock por simple timeout. |
+| CU08 | Nota sin stock sobrevive reinicio, avisa y se resuelve trazablemente.; Misma unidad no obtiene simultáneamente reemplazo, saldo y reembolso. |
+| CU09 | Saldo sin vencimiento y no transferible; aislamiento por empresa.; Reembolso mixto no convierte saldo en dinero. |
+| CU10 | Semilla y dataset versionados reproducen evaluación.; Básico no accede y métricas sintéticas no se presentan como precisión real comercial. |
+| CU11 | Identidades del mismo modelo se conservan al consultar; entre versiones no prometer igual numeración.; Resultado contiene trazabilidad y no es una respuesta generativa sin entrenamiento. |
+| CU12 | Cambio de tasa no altera cobro ya emitido.; Reembolsos parciales nunca exceden centavos capturados restantes. |
+| CU13 | Dos empresas pueden tener mismo correo normalizado sin mezclar cuentas.; Vencimiento 8 h oculta datos sin borrar pendientes. |
+| CU14 | Usuario de A no administra B aun con ID válido.; Rol revocado no borra efectivo/entrega válidos anteriores. |
+| CU15 | Límite activo resiste peticiones simultáneas.; Tarifa se congela en pedido aceptado, no altera entregas anteriores. |
+| CU16 | Filtro de color compuesto coincide en W/M y online/offline.; Promoción identifica umbral y no promete precio incondicional para una unidad. |
+| CU17 | Venta/transferencia/devolución generan movimientos únicos con origen.; Asignar cupo disminuye libre; sincronizar su venta no descuenta físico dos veces. |
+| CU18 | Cancelación repetida no aumenta stock.; Carrera adelanto/expiración tiene una decisión consistente bajo bloqueo. |
+| CU19 | Monto recibido - cambio = importe efectivo debido.; Pago mixto no duplica ingresos ni entrega antes de liquidación. |
+| CU20 | Misma unidad no se devuelve dos veces ni suma merma y reposición simultánea.; Parcialidad se refiere a unidades/importes elegibles, no retención automática del 50 %. |
+| CU21 | Pedido cobrado sin stock se deriva CU27 íntegro sin perder solicitud.; No mezclar carritos ni direcciones entre empresas. |
+| CU22 | Webhook repetido/desordenado no repite venta ni pago.; BOB/USD y centavos originales permanecen en reembolsos. |
+| CU23 | Saldo emitido/usado no suma ingreso nuevo.; Pedido no cumplido reembolsado no queda como venta neta entregada. |
+| CU24 | Cuatro reportes con filtros variables y datos reales, exportados coinciden con pantalla.; Prompt que solicita datos de otra empresa o DROP se rechaza. |
+| CU25 | Sincronizar una venta antigua no altera su fecha física.; Una venta no aparece duplicada por reintento. |
+| CU26 | Dos workers no duplican liberación.; Carrera cancelación/pago/expiración preserva invariantes. |
+| CU27 | Dos solicitudes concurrentes no reembolsan dos veces.; Reembolso no repone stock por sí mismo: devolución física CU20 controla inventario. |
 
-- CU04 incluye registro local y sincronización; CU13 registro público de clientes y login empresarial; CU16 filtros/detalle/disponibilidad; CU18 crear/consultar/cancelar. Las ocho fichas tienen autor vacío y fecha 24/10/2026.
-- Paquetes reales y grupos académicos son conceptos distintos. La distribución A/B corresponde a ocho casos, no a una división por tecnología.
-- Flutter sí incluye contado offline en próximas presentaciones. No mantener la antigua exclusión móvil ni eliminar otras funciones del primer parcial.
-- Comparar interfaz, esquemas y payloads: TIEMPO_INCOHERENTE se representa como CONFLICTO, sin reserva ni stock apartado. No confundir con un fallo de comunicación.
-- Abrir enlaces locales de la carpeta; las referencias del catálogo actual se resuelven en casos-de-uso.md y las LB en funciones-conservadas.md.
-- Comprobar que `/tienda/{empresa_codigo}` figura solo como navegación pública propuesta; no como API existente ni permiso. Ciudades globales pertenecen a plataforma; empresa consulta/selecciona y administra únicamente sucursales/tarifas propias. La pantalla inicial de selección de empresas es opcional posterior.
-- Confirmar que la empresa heredada conserva datos/IDs/sucursales y que Profesional es asignación administrativa **condicional al conteo real de tres activas**. Fechas de inicio/vencimiento no se inventan en migración; el conteo del 18/10 es histórico.
-- Separar visita de vencimiento: online desde creación central, offline aceptada desde creación local original; adelanto oportuno hasta 72 h desde el mismo origen. Ventana privada local de 8 h y JWT actual de 24 h son independientes; pendientes/resultados se conservan al ocultar datos.
+## Escenarios transversales adicionales
+- Timeout después de commit, caída antes/después de llamada Stripe, webhook duplicado/desordenado y respuesta perdida.
+- Dos pagos/reembolsos simultáneos, gasto concurrente de saldo, última unidad, cierre de caja con cola pendiente y pérdida de dispositivo.
+- Pedido pagado sin stock: devolución íntegra por medio original y saldo restaurado; nunca desaparición del comando.
+- Cambio fuera de stock: nota7d, aviso, traslado, aceptación48h, pago diferencia y envío con comprobantes.
+- Devolución parcial con descuento cantidad: prorrateo y centavos originales; no recalcular promoción histórica.
+- PWA instalable y FlutterSQLite reales: reinicio offline y migración local con comandos v1 pendientes.
+- Dos tenants, permisos por sucursal, token vencido, privacidad8h y turno8h independientes.
+- Reportes4 tipos reales: filtros y exports coincidentes; ML reproducible con métricas y origen sintético identificado.
 
-## Verificación funcional cuando exista implementación
-
-1. Registrar dos empresas y administradores; comprobar que el alta incompleta no deja residuos y que sin plan no se habilitan operaciones comerciales nuevas.
-2. Asignar/renovar/cambiar plan; probar fechas inválidas, límites configurables, reducción, gracia y consulta propia sin permiso para modificar suscripción.
-3. Registrar clientes e iniciar sesión por empresa desde el enlace público propuesto; probar roles, pertenencia, acceso por ID, cambio de enlace con sesión ajena y datos locales aislados. Tras 8 h/logout ocultar privados conservando pendientes/resultados, mantener catálogo público visible y recuperar privados solo tras reautenticar; un JWT vencido impide sincronizar aunque exista ventana local.
-4. Gestionar sucursales/tarifas de la empresa; impedir cruces, exceder límites y desactivar con compromisos. Empresa consulta/selecciona ciudad global sin modificarla; plataforma administra ciudades. Consulta móvil solo muestra sucursales permitidas.
-5. Instalar PWA compatible, descargar catálogo público por empresa en web y móvil, cerrar/reabrir sin red; verificar IndexedDB/SQLite, variantes, filtros, fechas y ausencia de stock garantizado. Probar sin descarga, cambio de empresa y descarga fallida sin perder copia previa.
-6. Registrar reserva offline, cerrar/reabrir, enviar al recuperar red y conservar resultado. Probar visita distinta del origen de vencimiento, llegada después de 24 h, adelanto confirmado antes/después del plazo, tiempo incoherente y error de autenticación/red sin pérdida del pendiente ni apartado indebido.
-7. Reenviar mismo UUID/contenido tras perder respuesta; una sola reserva y un solo efecto de stock. Mismo UUID con contenido distinto no altera el original ni filtra resultados ajenos.
-8. Crear, consultar y cancelar reserva online propia; distinguir solicitud local de reserva central. Cancelar dos veces sin doble liberación; verificar 24 h desde creación central o local según caso, extensión hasta 72 h desde el mismo origen, fecha de visita independiente y consistencia con expiración/adelantos y fechas mostradas en clientes.
-
-Estas son pruebas previstas; anotar por caso entorno, fecha, comando/pasos, resultado y evidencia real. No probar sobre la base activa. Pruebas de caja, pagos, cambios/saldo, reportes y ML se detallarán al abordar sus presentaciones; conservar regresión pertinente.
-
-## Integridad y hallazgos
-
-Comparar SHA-256 de cada archivo compartido enumerado en version.json, con las copias de los tres repositorios. Las huellas no validan lógica de negocio. Leer CAMBIOS-0.2.1.md y el historial CAMBIOS-0.2.0.md para distinguir aclaración documental de cambio de protocolo.
-
-Registrar hallazgo con CU, archivo/sección, comportamiento observado, regla esperada y propuesta. Codex debe cotejar con el código/OpenAPI actual; no transformar una limitación de la implementación en cambio de requisito.
+Registrar para cada ejecución: CP-ID, CU/RNF, commit, entorno, responsable, entrada/pasos, esperado, obtenido, estado y evidencia. No se han ejecutado estas pruebas en esta revisión.

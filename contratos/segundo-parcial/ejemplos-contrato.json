@@ -1,0 +1,108 @@
+{
+  "version": "0.3.0",
+  "operaciones": [
+    {
+      "version_esquema": 1,
+      "operacion_id": "00000000-0000-4000-8000-000000000001",
+      "tipo": "SOLICITAR_RESERVA",
+      "creada_local_en": "2026-10-31T10:00:00Z",
+      "empresa_id": "00000000-0000-4000-8000-000000000002",
+      "usuario_id": "00000000-0000-4000-8000-000000000003",
+      "dispositivo_id": "00000000-0000-4000-8000-000000000004",
+      "secuencia_local": 1,
+      "datos": {
+        "sucursal_id": "00000000-0000-4000-8000-000000000005",
+        "visita_en": "2026-10-31T18:00:00Z",
+        "lineas": [
+          {
+            "variante_id": "00000000-0000-4000-8000-000000000006",
+            "cantidad": 1
+          }
+        ]
+      }
+    },
+    {
+      "version_esquema": 2,
+      "operacion_id": "00000000-0000-4000-8000-000000000007",
+      "tipo": "SOLICITAR_COMPRA",
+      "creada_local_en": "2026-10-31T10:00:00Z",
+      "empresa_id": "00000000-0000-4000-8000-000000000002",
+      "usuario_id": "00000000-0000-4000-8000-000000000003",
+      "dispositivo_id": "00000000-0000-4000-8000-000000000004",
+      "secuencia_local": 2,
+      "datos": {
+        "sucursal_id": "00000000-0000-4000-8000-000000000005",
+        "modalidad": "DELIVERY",
+        "direccion": "Dirección de prueba",
+        "lineas": [
+          {
+            "variante_id": "00000000-0000-4000-8000-000000000006",
+            "cantidad": 1,
+            "precio_visto_bob": "100.00"
+          }
+        ]
+      }
+    },
+    {
+      "version_esquema": 1,
+      "operacion_id": "00000000-0000-4000-8000-000000000008",
+      "tipo": "REGISTRAR_VENTA_CAJA",
+      "creada_local_en": "2026-10-31T10:00:00Z",
+      "empresa_id": "00000000-0000-4000-8000-000000000002",
+      "usuario_id": "00000000-0000-4000-8000-000000000003",
+      "dispositivo_id": "00000000-0000-4000-8000-000000000004",
+      "secuencia_local": 3,
+      "datos": {
+        "turno_id": "00000000-0000-4000-8000-000000000009",
+        "habilitacion_id": "00000000-0000-4000-8000-000000000010",
+        "version_precios": "v-prueba-1",
+        "vendida_local_en": "2026-10-31T10:00:00Z",
+        "entregada_local_en": "2026-10-31T10:01:00Z",
+        "total_bob": "100.00",
+        "efectivo_recibido_bob": "120.00",
+        "cambio_entregado_bob": "20.00",
+        "lineas": [
+          {
+            "variante_id": "00000000-0000-4000-8000-000000000006",
+            "cantidad": 1,
+            "precio_autorizado_bob": "100.00"
+          }
+        ]
+      }
+    }
+  ],
+  "resultados": [
+    {
+      "operacion_id": "00000000-0000-4000-8000-000000000007",
+      "estado": "ACEPTADA",
+      "codigo": "OK",
+      "recibida_en": "2026-10-31T10:02:00Z",
+      "revision": 1,
+      "detalle": "Ejemplo sintético de contrato; no evidencia de ejecución."
+    },
+    {
+      "operacion_id": "00000000-0000-4000-8000-000000000007",
+      "estado": "CONFLICTO",
+      "codigo": "TIEMPO_INCOHERENTE",
+      "recibida_en": "2026-10-31T10:02:00Z",
+      "revision": 1,
+      "detalle": "Ejemplo sintético de contrato; no evidencia de ejecución."
+    },
+    {
+      "operacion_id": "00000000-0000-4000-8000-000000000007",
+      "estado": "REEMBOLSO_PENDIENTE",
+      "codigo": "PEDIDO_NO_CUMPLIBLE",
+      "recibida_en": "2026-10-31T10:02:00Z",
+      "revision": 1,
+      "detalle": "Ejemplo sintético de contrato; no evidencia de ejecución."
+    },
+    {
+      "operacion_id": "00000000-0000-4000-8000-000000000007",
+      "estado": "REEMBOLSADO",
+      "codigo": "REEMBOLSO_COMPLETADO",
+      "recibida_en": "2026-10-31T10:02:00Z",
+      "revision": 1,
+      "detalle": "Ejemplo sintético de contrato; no evidencia de ejecución."
+    }
+  ]
+}

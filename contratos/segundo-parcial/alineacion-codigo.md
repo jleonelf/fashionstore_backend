@@ -1,86 +1,50 @@
-# Alineación estática con los tres proyectos — primera presentación
+# Alineación estática de los 27 CU con el checkout del primer parcial
 
-**Inspección estática inicial:** 24/10/2026; contraste puntual adicional de reservas, adelantos, JWT y ciudades: 25/10/2026. Se inspeccionaron `fashionstore_backend` (`c4baf15`), `fashionstore_frontend` (`4d3a83b`) y `fashionstore_app` (`a4a42d4`), con los cambios documentales locales preservados. No se ejecutaron pruebas, migraciones, aplicaciones ni servicios externos. Los hallazgos siguientes describen código; las reglas acordadas siguen en [casos-de-uso.md](casos-de-uso.md), [reglas-aprobadas.md](reglas-aprobadas.md) e [interfaz.json](interfaz.json). Una ruta propuesta nunca se presenta como OpenAPI existente. Los códigos actuales se relacionan con los anteriores mediante [equivalencias-cu.md](equivalencias-cu.md).
+Revisión documental 0.3.0, 31/10/2026. Inspección de lectura de `fashionstore_backend` (`main`, `f8f4f7105bfb`), `fashionstore_frontend` (`main`, `7e8073f13415`) y `fashionstore_app` (`main`, `92aa79d2a37f`). Los cambios locales previos de contratos se conservaron. No se iniciaron servicios, pruebas funcionales ni migraciones. **Existente** significa código localizado, no funcionamiento comprobado; **adaptar** es trabajo posterior y **nuevo** no se declara implementado. Las rutas de `api-casos.json` e `interfaz.json` son propuestas salvo las que se identifican como heredadas.
 
-Rutas de archivos: `B/` = raíz de `fashionstore_backend/`, `W/` = `fashionstore_frontend/`, `M/` = `fashionstore_app/`. Las rutas HTTP mostradas son relativas a `/api/v1`.
+Las rutas backend abreviadas de módulos se ubican bajo `fashionstore_backend/app/core/modules/`; los servicios Angular bajo `fashionstore_frontend/src/app/features/` y los Flutter bajo `fashionstore_app/lib/features/`, salvo ruta completa indicada. Las fichas `casos/CUxx.md` son la regla contractual vigente; las etiquetas CU en comentarios y routers del primer parcial usan otra numeración y no renumeran este catálogo. El SQL de 42 tablas es una propuesta, no una migración aplicada. `app/api/v1/api.py` monta los routers actuales; las revisiones Alembic actuales llegan a `0005`, y `app/main.py` contiene DDL al arranque que debe retirarse o migrarse bajo un plan posterior, sin arrancarlo para esta revisión.
 
-## CU01 — Registrar empresa contratante
+| CU | Existente del primer parcial (evidencia estática) | Adaptación necesaria | Capacidad nueva pendiente / decisión |
+|---|---|---|---|
+| 01 empresa | `identidad_empresas/models.py`: `Usuario`, `Rol`, `Cliente`, `Empleado`; alta de usuarios en `usuario_service.py` | Vincular usuario/rol/sucursal al tenant y conservar IDs | `Empresa`, alta atómica y administrador de plataforma separados; datos heredados por verificar |
+| 02 suscripción | Sucursales activas en `organizacion/models.py` | Contar activas por empresa y aplicar capacidades en servicios existentes | Plan, suscripción, historial y gracia; fechas/plan de empresa heredada requieren captura administrativa |
+| 03 descarga | `catalogo/services/catalogo_service.py`; Angular `catalogo.service.ts`; Flutter `catalogo_service.dart` consumen API | Snapshot público por empresa y versionado | `GET /catalogo/descarga`, IndexedDB, SQLite y actualización atómica; sin copia local transaccional encontrada |
+| 04 reserva offline | `reserva_service.py:crear/cancelar`; Angular `reserva-traslado.service.ts`; Flutter `reserva_service.dart` | Origen temporal local verificable, tenant y deduplicación de operación | Cola persistente, sync y resultado durable; hora local aislada no concede stock |
+| 05 compra diferida | `carrito_service.py:checkout` y Stripe conectado; clientes ya tienen checkout | Separar solicitud, oferta, consentimiento, cobro y asignación; checkout actual aparta stock antes del pago | Compra v2, reconciliación y CU27; confirmar A-PAGO-01 con compañero/docente sin cambiar el orden acordado |
+| 06 turno/cupos | Inventario y venta presencial en `inventario`/`ventas_pagos` | Aislar cupo del stock libre y versionar precios | Paquete `caja_offline`, turno/habilitación verificable, caja PWA/Flutter y persistencia local |
+| 07 contado offline | `venta_service.py:registrarPresencial` y Kardex central | Registrar efectivo/entrega desde cupo sin doble descuento | Venta, comprobante, cola, cierre y recuperación offline en Angular y Flutter |
+| 08 cambio | `devolucion_service.py:registrar`, `traslado_service.py` y `entrega_service.py` son bases | Separar recepción, nota, compromiso de reemplazo, diferencia y entrega | Cambio, aceptación/espera, saldo o CU27, avisos; política propuesta configurable |
+| 09 saldo | Pagos y ventas en `ventas_pagos/models.py` | Desglosar medios de pago y restauración al compensar | Libro de saldo por cliente/empresa, retención, consumo y liberación |
+| 10 pronóstico | `analitica/services/dashboard_service.py` calcula indicadores | Extraer datos autorizados y versionar dataset por tenant | Regresor supervisado entrenado/evaluado; Gemini no lo sustituye |
+| 11 grupos | `analitica/services/reporte_service.py` consulta ventas | Preparar variables, dataset y aislamiento | Agrupador no supervisado, evaluación y artefactos; no encontrado entrenamiento |
+| 12 tasa | Importes en `ventas_pagos` y Stripe Test | Congelar tasa BOB/USD por oferta, pago y reembolso | Configuración global versionada, vigencia y autorización de plataforma |
+| 13 registro/sesión | `cliente_service.py:registrar`, `autenticacion_service.py:iniciarSesion`; Angular `auth.service.ts`, Flutter `auth_service.dart` | Resolver empresa antes de email/rol/JWT; separar plataforma, privacidad local de 8 h y revocación | Registro/login por empresa y política de almacenamiento privado offline |
+| 14 usuarios/roles | `usuario_service.py:crear/listar/asignarRol/actualizarEstado/desactivar`; Angular `usuario.service.ts` | Filtrar y validar cada lectura/mutación por empresa/sucursal | Roles de plataforma y empresa separados, revisión y límites de plan |
+| 15 organización | `ciudad_service.py`, `sucursal_service.py:actualizarTarifas`; Angular `organizacion.service.ts`, Flutter `sucursal_service.dart` | Ciudades globales, sucursales/tarifas por tenant; adaptar `PATCH` genérico propuesto a rutas actuales | Límite de sucursales activas y reglas de cambio concurrente |
+| 16 catálogo | `catalogo_service.py:filtrar`, `producto_service.py:buscarConFiltros`, variantes/promociones; clientes muestran catálogo | Precio/promoción por empresa y colores compuestos, paginación/consulta offline | Semántica EXACTO/TODOS_COMPONENTES y snapshot comercial de caja |
+| 17 inventario | `inventario_service.py:kardexPorVariante/existenciasPorSucursal/valorizacion`; Angular `inventario.service.ts` | Aislar consultas por tenant y descontar cupos/compromisos excluyentes | Libro/cupo de caja; no atribuir disponibilidad online a copia offline |
+| 18 reservas | `reserva_service.py:crear/obtener/listar/cancelar/preparar/atender`; clientes consumen reservas | Unificar plazo desde origen, empresa y resultado de sync; conservar preparación/traslados | Reserva offline aceptada centralmente, adelanto y avisos con idempotencia |
+| 19 venta presencial | `venta_service.py:registrarPresencial`, `pago_service.py:registrarCaja`; Angular `venta-presencial.service.ts` | Tenant, saldos y snapshots; distinguir cobro y entrega | Extensión de medios/posventa sin romper venta heredada; CU07 cubre efectivo offline |
+| 20 devolución/merma | `devolucion_service.py:registrar`, `MermaService.registrar`; Angular `posventa.service.ts` | Vincular unidades entregadas, inspección, elegibilidad y resolución financiera separada | Solicitud/seguimiento cliente y enlace a CU27; no inferir reembolso de reposición física |
+| 21 carrito/compra | `carrito_service.py:obtener_mio/agregar/modificar/quitar/checkout`; Angular `carrito.service.ts`, Flutter `carrito_service.dart` | Checkout actual compromete 60 min antes de Stripe; adaptar a A-PAGO-01 y oferta | Pedido/oferta separados, saldo, carrito local y puente con CU05 |
+| 22 Stripe | `stripe_service.py:crearIntencion/estado/confirmarWebhook`; Angular `stripe.service.ts`, Flutter `pago_service.dart` + `stripe_adapter.dart` | Intención ligada a orden/oferta, tasa y estados independientes; webhook seguro | Reembolso CU27, cobro antes de asignación, conciliación de tardíos; no pago Stripe offline |
+| 23 dashboard | `dashboard_service.py:indicadores`; Angular `dashboard.service.ts` | Métricas por tenant y pago/cumplimiento/neto, plan | Filtros/definiciones y fechas local/central del contrato nuevo |
+| 24 reporte generativo | `ia_analitica_service.py:generarReporte`; Angular `ia-analitica.service.ts` | Mantener interpretación restringida y añadir cuatro consultas tipadas por tenant | Snapshot, exportación CSV/XLSX/PDF y narrativa trazable; voz de búsqueda no es reporte |
+| 25 ventas sucursal | `reporte_service.py:ventasPorSucursal`; Angular `reporte-ventas.service.ts` | Tenant, fecha base y estados pago/cumplimiento, totales netos | Consulta/paginación ampliada sin perder rango heredado |
+| 26 expiración reservas | `reserva_service.py:expirarVencidas`; router `reservas.py` expone ejecución administrativa; `core/tareas.py` programa el job si se habilita | Origen 24/72 h, cierre idempotente y tenant; `EXPIRACION_JOB_ACTIVO` está desactivado por defecto | Observación operativa de la tarea; no se verificó ejecución periódica |
+| 27 reembolsos | `Pago` y `DevolucionService` dan referencias de origen | Registrar componentes capturados, importes originales, medios y unidades elegibles | Obligación/ejecución/conciliación; reembolso íntegro de pedido no cumplible y recuperación de saldo |
 
-| Dimensión | Contraste |
-|---|---|
-| Existente | B: `app/core/modules/identidad_empresas/models.py` define `Usuario`, `Rol`, `Cliente` y `Empleado`; `app/core/modules/organizacion/models.py` define `Sucursal`. W: `src/app/features/identidad_empresas/usuarios/` administra usuarios. M: solo identidad de cliente. |
-| Adaptación necesaria | Añadir ámbito empresarial y de plataforma, alta consistente de empresa y administrador inicial, autorización efectiva y aislamiento de referencias. El paquete dueño propuesto es `identidad_empresas`; `organizacion` aporta sucursales. |
-| Faltante | No hay `Empresa`, administrador de plataforma distinguido ni `POST /empresas`. Ningún `empresa_id` atraviesa los modelos actuales. El alta y la migración tenant son diseño, no funcionalidad existente. |
-| Archivos implicados | B: `app/core/modules/identidad_empresas/{models.py,schemas.py,routers/,services/}`, `app/core/dependencias.py`, `app/db/modelos.py`, `app/api/v1/api.py`, `alembic/versions/`. W: `src/app/features/identidad_empresas/`, `src/app/app.routes.ts`. M: `lib/core/session/` para consumir el ámbito, sin alta administrativa. |
+## Diferencias técnicas que deben guiar los adaptadores
 
-## CU02 — Administrar suscripción de empresa
+- Backend `app/api/v1/api.py` monta `GET /reportes/dashboard`, `GET /reportes/ventas-sucursal` y `POST /ia/reportes`; el contrato propone `/analitica/dashboard`, `/analitica/ventas-sucursal` y `/reportes/interpretar|consultar|exportar`. Son endpoints nuevos o adaptadores, no alias ya existentes.
+- Backend `ventas_pagos/routers/pagos_stripe.py` recibe `IntencionCrearDTO{venta_id}` y consulta `/pagos/stripe/estado/{venta_id}`. CU22 propone `contexto,recurso_id,oferta_revision` y consulta `{recurso_id}`: conservar el consumidor heredado mediante adaptador/versionado. El webhook firmado es del proveedor; no lleva `Idempotency-Key` de cliente.
+- Backend `ventas_pagos/routers/carritos.py` usa línea identificada por `variante_id`; la ruta contractual `/{linea_id}` y la semántica de oferta requieren adaptación explícita. `carrito_service.py:_checkout_en_tx` bloquea filas y aumenta `reservado` antes del cobro; no cumple A-PAGO-01.
+- Backend `identidad_empresas/models.py` no tiene `empresa_id`; `organizacion/models.py` mantiene sucursales sin tenant. `app/core/dependencias.py` y permisos actuales derivan rol/sucursal, no empresa. El tenant debe entrar en consulta, escritura, FK y JWT sin asumir que una URL lo autoriza.
+- Angular `auth.service.ts` usa `localStorage` para token/perfil; no hay IndexedDB/Service Worker/manifest de PWA. Flutter tiene `SharedPreferences` para sesión/carrito y `BolsaStore` para reserva, sin SQLite de negocio. Las exigencias de persistencia local y privacidad siguen pendientes.
+- Los métodos de primer parcial conservan contratos y numeración histórica propios; `equivalencias-cu.md` y `funciones-conservadas.md` mantienen la correspondencia. Ninguna carpeta o pantalla acredita los nuevos flujos de segundo parcial.
 
-| Dimensión | Contraste |
-|---|---|
-| Existente | B: `Sucursal` tiene estado activo y parámetros de tarifa/adelanto; `SucursalService` crea y administra sucursales. W: pantalla `features/organizacion/sucursales/`. M: `SucursalService.listar` consulta sucursales. |
-| Adaptación necesaria | Validar capacidad y vigencia del plan en creación/activación de sucursal y nuevas operaciones, con administración de plataforma y consulta del plan propio. Coordinar con CU01/CU15 y operaciones de reservas. |
-| Faltante | No hay entidades de plan, suscripción, historial, gracia, límite por empresa ni `POST /empresas/{empresa_id}/suscripciones` o `GET /empresas/mi-plan`. Las cantidades Básico 2/Profesional 10 son regla acordada, no dato de configuración actual. |
-| Archivos implicados | B: `app/core/modules/identidad_empresas/`, `app/core/modules/organizacion/services/sucursal_service.py`, `app/core/modules/reservas_traslados/services/reserva_service.py`, `alembic/versions/`. W: `features/identidad_empresas/` y `organizacion/`. M: sesión/cuenta para mostrar capacidades, sin administración. |
+## Preguntas de negocio y parámetros
 
-## CU03 — Descargar catálogo para consulta offline
+**Confirmación pendiente:** A-PAGO-01 es la interpretación solicitada del chat; compañero/docente deben confirmar el orden cobro conectado → asignación final → reembolso íntegro si falla. Hasta entonces se conserva exactamente esa regla. También deben validarse datos heredados efectivos (empresa, plan, fechas y sucursales), que no pueden inventarse desde el código.
 
-| Dimensión | Contraste |
-|---|---|
-| Existente | B: `GET /productos`, `GET /catalogo/productos`, `GET /catalogo/filtros-opciones` y `GET /variantes/{id}/disponibilidad` ofrecen consulta online; `catalogo` posee productos, variantes y maestros. W: `CatalogoService.consultarCatalogo`. M: `CatalogoService.listarProductos` y detalle/disponibilidad. |
-| Adaptación necesaria | Definir descarga versionada y consistente por empresa/ámbito, fecha y disponibilidad pública conocida; persistir copia válida en IndexedDB y SQLite y conservarla ante falla. El enlace `/tienda/{empresa_codigo}` es navegación propuesta para identificar catálogo, no API existente ni autorización. La consulta pública actual de productos no resuelve empresa y `GET /sucursales` exige autenticación. |
-| Faltante | No hay `GET /catalogo/descarga`, versión de descarga, almacén IndexedDB de negocio, SQLite ni flujo de descarga/reapertura sin red. W no registra Service Worker ni manifest de la aplicación Angular. `M/web/manifest.json` no es el manifest Angular. |
-| Archivos implicados | B: `app/core/modules/catalogo/{routers/catalogo.py,services/catalogo_service.py,schemas.py,models.py}`, `inventario/`, `alembic/versions/`. W: `features/catalogo/`, `src/app/app.config.ts`, `angular.json`, `src/index.html`. M: `lib/features/catalogo/`, `lib/core/`, `pubspec.yaml`. |
-
-## CU04 — Registrar reserva offline
-
-| Dimensión | Contraste |
-|---|---|
-| Existente | B: `POST /reservas` y `ReservaService.crear` usan `Idempotency-Key`, transacción y bloqueo de inventario para una reserva **online**. W: `ReservaTrasladoService.crearReserva` envía HTTP. M: `ReservaService.crear` envía HTTP; `BolsaStore` guarda líneas solo en memoria. |
-| Adaptación necesaria | Conservar ese servicio como dueño de la aceptación central, integrando una operación durable con `operacion_id`, `creada_local_en`, usuario/empresa, validación temporal, respuesta almacenada y plazo desde creación local. `ReservaService.crear` calcula hoy `fecha_visita + 1 día` cuando se envía visita: debe separar visita de vencimiento. Clientes deben guardar solicitud, detalle y resultado antes de declarar éxito local. |
-| Faltante | No hay cola durable, `POST /sincronizacion/operaciones` ni `GET /sincronizacion/operaciones/{operacion_id}`, referencia horaria, estados `CONFLICTO`/`TIEMPO_INCOHERENTE` implementados ni persistencia de reservas en IndexedDB/SQLite. La idempotencia actual de HTTP online no sustituye el protocolo offline. |
-| Archivos implicados | B: `app/core/modules/reservas_traslados/{services/reserva_service.py,routers/reservas.py,schemas.py,models.py}`, `inventario/repositories/inventario_repository.py`, `app/core/idempotencia*.py`, `app/core/reloj.py`, `alembic/versions/`. W: `features/reservas_traslados/`, `core/`. M: `features/reservas_traslados/reservas/{bolsa_store.dart,bolsa_screen.dart}`, `services/reserva_service.dart`, `core/`. |
-
-## CU13 — Registrarse e iniciar sesión por empresa
-
-| Dimensión | Contraste |
-|---|---|
-| Existente | B: `POST /clientes` (`registrarCliente`), `POST /sesion` (`iniciarSesion`), JWT y `require_roles`; `app/core/config.py` declara 24 h por defecto para JWT. W: `AuthService` conserva token/perfil en `localStorage`; guarda e interceptor Bearer. M: `AuthService` y `SessionManager` conservan sesión en `SharedPreferences` durante 24 h. |
-| Adaptación necesaria | Añadir selección/contexto de empresa al registro/login, unicidad de correo dentro de empresa, rol/ámbito en sesión y autorización backend por recurso. El enlace público propuesto `/tienda/{empresa_codigo}` debe llevar contexto coherente sin reutilizar sesión ajena. Separar almacenamiento local por usuario/empresa y aplicar ventana privada de 8 h desde último login online sin borrar pendientes/resultados; no exige acortar el JWT de 24 h. |
-| Faltante | `RegistroClienteDTO`, `LoginDTO`, `ClientePerfilDTO` y los cuerpos enviados por W/M no contienen empresa; `Usuario.correo_electronico` es único global. No hay rol de administrador de plataforma ni 8 h de acceso privado; `localStorage` web no impone expiración equivalente. |
-| Archivos implicados | B: `app/core/modules/identidad_empresas/{models.py,schemas.py,routers/clientes.py,routers/sesion.py,services/}`, `app/core/{dependencias.py,permisos.py,seguridad.py}`, migraciones. W: `features/identidad_empresas/`, `core/{guards,interceptors}/`. M: `features/identidad_empresas/`, `core/{network,session}/`. |
-
-## CU15 — Gestionar ciudades, sucursales y tarifas
-
-| Dimensión | Contraste |
-|---|---|
-| Existente | B: `GET/POST /ciudades`, `GET/POST /sucursales`, configuración de tarifas y adelanto; `SucursalService` y modelos `Ciudad`/`Sucursal`. W: `OrganizacionService` y pantalla de sucursales. M: `SucursalService.listar` para selección, sin administración. |
-| Adaptación necesaria | Mantener ciudades como referencia global administrada solo por plataforma; la empresa puede consultarlas/seleccionarlas, mientras sucursales y tarifas son propias. Separar rol de administrador de plataforma y empresarial; validar plan/límite al activar y compromisos al desactivar. |
-| Faltante | `Sucursal` no tiene `empresa_id`; `registrarCiudad` en `routers/ciudades.py` usa `require_roles("ADMINISTRADOR")` sin distinguir plataforma de empresa, y `listarCiudades` exige usuario autenticado. No hay permiso de plataforma separado ni validación de plan para sucursales. La propuesta de CU15 no queda cumplida por las rutas actuales. |
-| Archivos implicados | B: `app/core/modules/organizacion/{models.py,schemas.py,routers/ciudades.py,routers/sucursales.py,services/sucursal_service.py}`, `app/core/dependencias.py`, migraciones. W: `features/organizacion/`, `app.routes.ts`. M: `features/organizacion/services/sucursal_service.dart`. |
-
-## CU16 — Consultar catálogo de prendas
-
-| Dimensión | Contraste |
-|---|---|
-| Existente | B: `ProductoService`/`CatalogoService` implementan filtros y detalle, variantes y disponibilidad por sucursal. W: `CatalogoService.consultarCatalogo` y pantalla `catalogo`; M: `CatalogoService` consulta productos, variantes, filtros y disponibilidad online. |
-| Adaptación necesaria | Acotar resultados públicos a la empresa identificada por el enlace propuesto, sin filtrar datos privados; para funciones privadas validar identidad/empresa en backend. Leer copia de CU03 sin red, indicando fecha, origen y disponibilidad conocida. Preservar filtros y rutas online, sin renombrarlas por numeración académica. |
-| Faltante | Los modelos de producto/variante y consultas actuales carecen de ámbito empresarial; los clientes no tienen copia de catálogo durable ni selector de fuente local. No existe consulta offline verificable. |
-| Archivos implicados | B: `app/core/modules/catalogo/{models.py,schemas.py,routers/productos.py,routers/catalogo.py,services/catalogo_service.py}`, `inventario/`, migraciones. W: `features/catalogo/{catalogo/,services/,models/}`. M: `features/catalogo/{catalogo/,services/,models/}` y almacenamiento SQLite previsto. |
-
-## CU18 — Gestionar reservas de prendas
-
-| Dimensión | Contraste |
-|---|---|
-| Existente | B: `ReservaService.crear`, `listar`, `obtener`, `cancelar`, `expirarVencidas` y rutas `POST/GET /reservas`, `PATCH /reservas/{id}/cancelar`; inventario se bloquea y se registra Kardex. `crear` usa `fecha_visita + 1 día` si se proporciona visita, y `PagoService` extiende desde `reserva.fecha_creacion`. W: `ReservaTrasladoService`; M: `ReservaService` y pantallas de reservas. |
-| Adaptación necesaria | Restringir por empresa además de propietario/sucursal; compartir aceptación central con CU04. Vencimiento online: creación central +24 h; offline aceptada: creación local original +24 h; adelanto confirmado online a tiempo: +72 h desde el mismo origen. Revisar creación, adelantos, cancelación, expiración automática y fechas presentadas en clientes. Extender DTO/persistencia sin recalcular datos históricos en esta revisión. |
-| Faltante | No hay empresa en `Reserva`, `ReservaCrearDTO` ni respuesta; las reservas online aceptadas desde CU04 aún no existen. La vista móvil de estado local no prueba sincronización. |
-| Archivos implicados | B: `app/core/modules/reservas_traslados/{models.py,schemas.py,routers/reservas.py,services/reserva_service.py}`, `inventario/`, `app/core/tareas.py`, migraciones. W: `features/reservas_traslados/reservas/`. M: `features/reservas_traslados/reservas/`, `services/reserva_service.dart`. |
-
-## Dependencias, decisiones y estado de verificación
-
-- **Bloque A precede a la integración B:** sesión/empresa/sucursal, rol de plataforma, ámbito del catálogo público y permisos deben tener una interfaz mínima acordada. B puede preparar pantallas y almacenamiento con dobles identificados mientras tanto.
-- **Rutas existentes frente a propuestas:** las actuales están montadas en `B/app/api/v1/api.py`; `interfaz.json` enumera rutas futuras. Los DTO actuales de reserva usan `sucursal_destino_id`/`fecha_visita` y `Idempotency-Key`; el comando offline propuesto usa envoltorio con `empresa_id`, `operacion_id`, `creada_local_en` y datos `sucursal_id`/`visita_en`. Es un adaptador por diseñar, no un simple cambio de nombre de campos.
-- **Migración:** `B/alembic/versions/` llega a `0005_ciclo3_correcciones`. `B/app/main.py` ejecuta DDL de restricciones en `lifespan()` al arrancar; una prueba de aplicación también exige base aislada. `plan-migracion-db.md` contiene cifras históricas de 18/10, no conteos verificados en esta revisión.
-- **Decisiones cerradas el 25/10/2026:** enlace público empresarial de navegación propuesto `/tienda/{empresa_codigo}`; ciudades globales administradas por plataforma; asignación administrativa de Profesional a la empresa heredada si se confirman tres sucursales activas. El enlace no es una ruta/API constatada ni permiso privado. Permanecen pendientes los **datos operativos**, no estas reglas: medir sucursales reales, registrar cualquier diferencia y capturar explícitamente fechas de inicio/vencimiento antes de aplicar la asignación. Básico sigue en 2 y Profesional en 10; no se desactivan sucursales ni se crea una suscripción ficticia.
-- **Vencimiento y privacidad:** se contrastaron además `B/app/core/modules/reservas_traslados/services/reserva_service.py:209–213`, `B/app/core/modules/ventas_pagos/services/pago_service.py:155`, `B/app/core/config.py:23` y `M/lib/core/session/session_manager.dart`. Los dos primeros requieren adaptación conjunta del origen de vencimiento; el JWT declarado de 24 h y la sesión móvil actual de 24 h no cumplen por sí solos la ventana privada offline de 8 h. Esta última es independiente y no autoriza sincronizar con token vencido.
-- **Verificación:** todo lo anterior es lectura estática. No hay pruebas ejecutadas ni evidencia de funcionamiento offline, multitenant o de los endpoints nuevos.
+**Parámetros propuestos, no exigencias atribuidas a la docente:** 15 días para solicitud voluntaria, 7 días de espera de reemplazo, 48 h para aceptar/pagar oferta de reemplazo, 48 h como objetivo interno para iniciar reembolso, 60 min de vigencia de oferta antes de iniciar pago, umbrales/porcentajes de promoción y costo de envío según causa. Se versionan y congelan por operación; el 50 % no es regla. Ver `decisiones-0.3.0.md`.
