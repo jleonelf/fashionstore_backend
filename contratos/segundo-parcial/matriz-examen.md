@@ -22,4 +22,4 @@
 | RNF11/12 calidad/coherencia | guia-revision-manual.md + auditoría | Automatizar reglas críticas además de evidencias manuales; UML representa lo realmente construido. |
 | Nube externamente accesible | Despliegue posterior | Registrar URLs/versión reales; no inventar proveedor backend/frontend. |
 
-A-PAGO-01 se basa en aclaración indirecta del chat, no en una frase del PDF que exija tarjeta offline. La confirmación pendiente puede cambiar ese flujo; el resto de la cobertura permanece.
+A-PAGO-01 fue confirmado por el compañero según comunicación del usuario en 0.3.1; la confirmación académica posterior sigue pendiente. El contrato mantiene cobro electrónico conectado antes de asignación final y CU27 si no se cumple. No se atribuye tarjeta offline al PDF ni se modifica silenciosamente la regla.

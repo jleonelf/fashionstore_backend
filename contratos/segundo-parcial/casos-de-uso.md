@@ -1,6 +1,6 @@
-# Casos de uso — catálogo completo 0.3.0
+# Casos de uso — catálogo completo 0.3.1
 
-27 contratos funcionales de implementación. No acreditan ejecución. CU01–CU26 conservan sus números; CU27 se añade por reembolsos. La interpretación revisable A-PAGO-01 y políticas están en [decisiones-0.3.0.md](decisiones-0.3.0.md).
+27 contratos funcionales de implementación. No acreditan ejecución. CU01–CU26 conservan sus números; CU27 se añade por reembolsos. A-PAGO-01 confirmado por el compañero, compra v3 y políticas del equipo están en [decisiones-0.3.1.md](decisiones-0.3.1.md); la confirmación académica posterior queda anotada allí.
 
 | Código | Nombre | Paquete | Canales |
 |---|---|---|---|
@@ -8,7 +8,7 @@
 | [CU02](casos/CU02.md) | Administrar suscripción de empresa | `identidad_empresas` | B/W online; M consulta capacidades |
 | [CU03](casos/CU03.md) | Descargar catálogo para consulta offline | `catalogo` | B/W/M: descarga online, lectura local offline |
 | [CU04](casos/CU04.md) | Registrar reserva offline | `reservas_traslados` | B/W/M |
-| [CU05](casos/CU05.md) | Sincronizar solicitud de compra digital | `ventas_pagos` | B/W/M; preparación offline, pasarela online |
+| [CU05](casos/CU05.md) | Sincronizar solicitud de compra digital | `ventas_pagos` | B/W/M; preparación offline y cobro conectado condicionado |
 | [CU06](casos/CU06.md) | Habilitar turno y cupos de caja offline | `caja_offline` | B/W/M; habilitación online |
 | [CU07](casos/CU07.md) | Registrar y sincronizar venta de contado offline | `caja_offline` | B/W/M; efectivo y entrega sin red |
 | [CU08](casos/CU08.md) | Cambiar prenda y liquidar diferencia | `posventa` | B/W gestión; W/M cliente consulta, acepta, paga y recibe avisos online |

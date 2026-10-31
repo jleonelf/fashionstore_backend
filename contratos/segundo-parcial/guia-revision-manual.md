@@ -43,3 +43,12 @@ Cada CU exige prueba positiva, negativa de permiso/tenant y los escenarios espec
 - Reportes4 tipos reales: filtros y exports coincidentes; ML reproducible con métricas y origen sintético identificado.
 
 Registrar para cada ejecución: CP-ID, CU/RNF, commit, entorno, responsable, entrada/pasos, esperado, obtenido, estado y evidencia. No se han ejecutado estas pruebas en esta revisión.
+
+## Escenarios añadidos en 0.3.1, aún sin ejecutar
+
+- Compra v3 con consentimiento específico y método preparado: reconexión con sesión válida intenta un solo cargo conectado; reinicio, timeout y webhook repetido no duplican cobro ni compromiso. Reenvío v1/v2 conserva semántica anterior.
+- Sin método/consentimiento: `PENDIENTE_INTERVENCION`; cambio de importe, moneda, tasa/conversión o condiciones: `REQUIERE_NUEVA_ACEPTACION`; autenticación adicional: `REQUIERE_ACCION_CLIENTE`, aviso y misma intención. Ninguna cola local acredita pago.
+- Cancelación previa al cargo impide cobro; carrera entra a conciliación y, si hubo captura tardía, CU27 íntegro. Verificar restauración única de saldo, compromiso posterior al pago y salida física posterior a entrega.
+- Motivos TALLA/COLOR/DEFECTO_FABRICACION/PRODUCTO_INCORRECTO/OTRO: condición, responsabilidad y resolución independientes. Recepción no incrementa vendible antes de inspección autorizada.
+- Voluntaria día 15 con comprobante/inspección; defecto/incumplimiento día 16 a evaluación sin rechazo/reembolso automático. Verificar 7 días, 48 h y pagador/tarifa según política versionada.
+- Migración v1/v2→v3 conserva UUID/hash, colas, ámbitos, saldos y cupos de caja. Ejecutar solo posteriormente en ambiente aislado.

@@ -1,4 +1,4 @@
-# Trazabilidad de implementación — 0.3.0
+# Trazabilidad de implementación — 0.3.1
 
 | CU | Contrato | Datos/API | Evidencias mínimas pendientes |
 |---|---|---|---|

@@ -1,7 +1,7 @@
 {
   "nombre": "fashionstore-segundo-parcial",
-  "version": "0.3.0",
-  "estado": "especificacion-completa-con-interpretacion-A-PAGO-01-revisable",
+  "version": "0.4.0",
+  "estado": "especificacion-v3-con-A-PAGO-01-confirmado-por-companero",
   "base": "/api/v1",
   "formato": {
     "fecha_hora": "ISO 8601 con zona horaria",
@@ -25,7 +25,8 @@
     ],
     "version_esquema": [
       1,
-      2
+      2,
+      3
     ],
     "tipos": {
       "SOLICITAR_RESERVA": {
@@ -50,7 +51,24 @@
           "cantidad",
           "precio_visto_bob"
         ],
-        "regla": "v2: registrar solicitud; cobro online explícito antes de asignación final de stock; no cumplible cobrado genera reembolso. v1 conservado, sin cobro automático."
+        "regla": "v1/v2 conservan semántica; v3 permite consentimiento específico y método preparado para cobro conectado condicionado al reconectar, antes de asignación final; no cumplible cobrado genera CU27 íntegro.",
+        "v3_autorizacion_cobro_campos": [
+          "consentimiento_id",
+          "aceptado_local_en",
+          "huella_compra",
+          "base_bob",
+          "descuento_bob",
+          "envio_bob",
+          "total_bob",
+          "moneda_cobro",
+          "importe_cobro",
+          "tasa_id",
+          "tasa_bob_por_usd",
+          "condiciones_version",
+          "vigente_hasta",
+          "preparacion_pago_id",
+          "permite_cobro_al_reconectar"
+        ]
       },
       "REGISTRAR_VENTA_CAJA": {
         "datos_obligatorios": [
@@ -111,7 +129,12 @@
       "PAGADO_PENDIENTE_ASIGNACION",
       "CONFIRMADO",
       "REEMBOLSO_PENDIENTE",
-      "REEMBOLSADO"
+      "REEMBOLSADO",
+      "PENDIENTE_INTERVENCION",
+      "REQUIERE_NUEVA_ACEPTACION",
+      "REQUIERE_ACCION_CLIENTE",
+      "CANCELACION_EN_CONCILIACION",
+      "CANCELADA"
     ],
     "codigos": [
       "OK",
@@ -127,7 +150,13 @@
       "COBRO_CONFIRMADO",
       "PEDIDO_NO_CUMPLIBLE",
       "REEMBOLSO_EN_PROCESO",
-      "REEMBOLSO_COMPLETADO"
+      "REEMBOLSO_COMPLETADO",
+      "METODO_NO_PREPARADO",
+      "AUTORIZACION_INSUFICIENTE",
+      "OFERTA_CAMBIADA",
+      "ACCION_PROVEEDOR_REQUERIDA",
+      "CANCELACION_EN_CURSO",
+      "SOLICITUD_CANCELADA"
     ],
     "reglas_reserva": {
       "TIEMPO_INCOHERENTE": "CONFLICTO",
@@ -135,6 +164,14 @@
       "SOLICITUD_VENCIDA": "RECHAZADA",
       "PLAN_NO_HABILITADO": "RECHAZADA",
       "OK": "ACEPTADA"
+    },
+    "reglas_compra_v3": {
+      "METODO_NO_PREPARADO": "PENDIENTE_INTERVENCION",
+      "AUTORIZACION_INSUFICIENTE": "PENDIENTE_INTERVENCION",
+      "OFERTA_CAMBIADA": "REQUIERE_NUEVA_ACEPTACION",
+      "ACCION_PROVEEDOR_REQUERIDA": "REQUIERE_ACCION_CLIENTE",
+      "CANCELACION_EN_CURSO": "CANCELACION_EN_CONCILIACION",
+      "SOLICITUD_CANCELADA": "CANCELADA"
     }
   },
   "rutas_nuevas_propuestas": [
@@ -431,6 +468,30 @@
       "ruta": "/reembolsos/{reembolso_id}/conciliar",
       "cu": "CU27",
       "detalle": "casos/CU27.md"
+    },
+    {
+      "metodo": "POST",
+      "ruta": "/sincronizacion/operaciones/{operacion_id}/cancelar",
+      "cu": "CU05",
+      "detalle": "casos/CU05.md"
+    },
+    {
+      "metodo": "POST",
+      "ruta": "/pagos/stripe/metodos/preparar",
+      "cu": "CU22",
+      "detalle": "casos/CU22.md"
+    },
+    {
+      "metodo": "GET",
+      "ruta": "/pagos/stripe/metodos/{preparacion_pago_id}",
+      "cu": "CU22",
+      "detalle": "casos/CU22.md"
+    },
+    {
+      "metodo": "POST",
+      "ruta": "/pagos/stripe/ordenes/{orden_pago_id}/continuar-accion",
+      "cu": "CU22",
+      "detalle": "casos/CU22.md"
     }
   ],
   "rutas_existentes_a_extender": [
@@ -486,8 +547,8 @@
       "CU18"
     ],
     "equivalencias": "equivalencias-cu.json",
-    "nota": "Todos los CU especificados; CU27 añadido; A-PAGO-01 interpretación a confirmar; endpoints no certificados como implementados."
+    "nota": "27 CU especificados; CU27 separado; A-PAGO-01 confirmado por compañero, confirmación académica posterior; rutas nuevas propuestas, no implementadas."
   },
-  "compatibilidad": "v1 reservas/caja compatible. Compra v1 conservada y migrada con consentimiento; compra nueva v2. Clientes viejos no interpretan estados nuevos: negociar versión antes de activar política.",
-  "nota_clasificacion_rutas": "Rutas existentes cotejadas estáticamente contra routers montados en app/api/v1/api.py; las nuevas siguen propuestas. Un endpoint heredado requiere adaptar DTO y semántica cuando su ficha 0.3.0 lo indique."
+  "compatibilidad": "Cambio incompatible de mensajes: protocolo 0.4.0; v3 solo SOLICITAR_COMPRA y negociación de capacidad/estados. v1 reservas/caja y compras v1/v2 conservan comportamiento; reenvíos antiguos no cobran automáticamente.",
+  "nota_clasificacion_rutas": "Rutas existentes cotejadas estáticamente contra routers montados en app/api/v1/api.py; las nuevas siguen propuestas. Un endpoint heredado requiere adaptar DTO y semántica cuando su ficha vigente lo indique."
 }

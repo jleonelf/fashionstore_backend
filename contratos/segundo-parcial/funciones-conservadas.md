@@ -1,6 +1,6 @@
 # Funciones de primer parcial conservadas
 
-Las once funciones LB continúan en sus paquetes; la numeración nueva no autoriza eliminarlas. El detalle histórico de cada ficha se conserva en [antecedentes/0.2.1/funciones-conservadas.md](antecedentes/0.2.1/funciones-conservadas.md). Para implementación actual prevalecen las reglas0.3.0.
+Las once funciones LB continúan en sus paquetes; la numeración nueva no autoriza eliminarlas. El detalle histórico de cada ficha se conserva en [antecedentes/0.2.1/funciones-conservadas.md](antecedentes/0.2.1/funciones-conservadas.md). Para implementación actual prevalecen las reglas 0.3.1 y el protocolo 0.4.0 negociado.
 
 | Función | Ampliación/coordinación |
 |---|---|

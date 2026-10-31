@@ -16,7 +16,7 @@ Los nombres siguientes son lógicos propuestos: adaptar al esquema real sin dupl
 | colores / color_componentes | color compuesto, componentes referenciados, orden de presentación | Sin ciclo, sin componente ajeno; una variante tiene un SKU y stock, aunque su color tenga varios componentes. |
 | promociones / reglas_cantidad / promocion_variante | vigencia, ámbito, cantidad_minima, tipo descuento, valor, prioridad, acumulable=false inicial | cantidad_minima>=1, porcentaje0..100, importe>=0, fechas ordenadas; más de3 equivale mínimo4. |
 | detalle_precio_aplicado / snapshots | línea origen, precio base, cantidad, promociones, descuento prorrateado, versión | Copia histórica; suma de centavos coincide con cabecera. catálogo/ventas_pagos/caja según origen. |
-| inventario_sucursal / movimientos | variante/sucursal, físico, reservas, cupos; documento origen | Único tenant/sucursal/variante; movimiento único por documento/tipo/línea; bloqueo e invariantes en transacción. |
+| inventario_sucursal / movimientos | variante/sucursal, físico, reservas, compromisos digitales posteriores a captura, cupos; documento origen | Único tenant/sucursal/variante; movimiento único por documento/tipo/línea; bloqueo e invariantes en transacción. |
 | reservas / detalles / adelantos | origen_plazo_en, origen LOCAL/CENTRAL, visita, vence, operación y pagos | 24/72 h desde mismo origen; cambios históricos requieren regla explícita, no recálculo masivo ciego. |
 | pedidos_compra / detalles_pedido | cliente, sucursal propuesta/asignada, origen offline, oferta, pago, cumplimiento, dirección snapshot | Pago y cumplimiento independientes; operación única; detalle por variante sin duplicados ambiguos. |
 | ofertas_compra / detalles_oferta | versión, base/descuento/envío/total BOB, tasa_id, USD, aceptada_en, vence_en | Inmutable tras aceptación; 60min configurable antes de iniciar pago. No garantiza stock. |
@@ -24,14 +24,14 @@ Los nombres siguientes son lógicos propuestos: adaptar al esquema real sin dupl
 | ventas / detalles_venta / entregas | pedido/caja origen, líneas netas, descuentos, fechas física/central, origen_turno | Preservar IDs existentes, agregar referencia pedido; no convertir captura pendiente de cumplimiento en entrega. |
 | cajas / turnos / habilitaciones | dispositivo, actor, sucursal, autorizado_en, vence_en, snapshot_precios, estado, firma/token de autorización | Un turno incompatible por dispositivo; habilitación8h. No guardar secretos de firma en clientes. |
 | cupos_caja / consumos_cupo | turno, variante, asignado, consumido, devuelto, incidencias | Consumo único por UUID/línea; consumido+devuelto<=asignado; cierre auditado. |
-| devoluciones / detalles_devolucion / inspecciones | venta/línea, cantidad, recibido_en, aptitud, motivo, inspector, destino financiero | Unidad elegible bloqueada contra cambio/reembolso simultáneo; inventario separado de liquidación. |
+| devoluciones / detalles_devolucion / inspecciones | venta/línea, cantidad, recibido_en, motivo_codigo/descripcion, condicion_fisica, responsabilidad_tienda, inspector, resolución financiera | Unidad elegible bloqueada contra cambio/reembolso simultáneo; recepción en custodia, inventario separado de liquidación. |
 | cambios / detalles_cambio / notas_cambio | devolución, valor neto original, reemplazos, diferencia, política, plazo/estado | Espera/aceptación explícitas; una resolución financiera por importe, no saldo más dinero duplicados. |
 | compromisos_reemplazo / traslados | nota, variante, sucursal origen/destino, cantidades, vence, traslado_id | Reutilizar traslado existente; no inventar stock en tránsito como vendible antes de recepción. |
 | entregas_reemplazo | cambio, dirección, tarifa aceptada, pagador, estado, fechas, comprobante | Original pedidos_entrega con UNIQUE venta_id no alcanza por sí solo para múltiples reemplazos; ampliar o entidad separada con FK explícita. |
 | cuentas_saldo / movimientos_saldo / retenciones_saldo | cliente+empresa, crédito/débito, origen, compra, estado y revisión | Cuenta única cliente/empresa; libro inmutable; débito reservado bajo bloqueo; restauración única por resolución. |
 | obligaciones_reembolso / detalles / ejecuciones | origen, pago, unidades, importe BOB, centavos USD, tasa original, medio, causa, estado, referencia externa | Reservar importe contra otros reembolsos/saldo; sumas por pago<=capturado-restaurado; external_ref único. |
 | comprobantes / versiones | tipo, código, recurso origen, emisor, contenido snapshot/hash, fechas | Único empresa/tipo/código; no fiscal; corregir por documento vinculado. No sobreescribir evidencia de cobro. |
-| operaciones_sincronizacion | esquema, UUID, actor/empresa/dispositivo/secuencia, hash, contenido, resultado/revisión | Conservar v1; añadir v2 de compra y estados nuevos. SQL previo restringía CONFLICTO a TIEMPO_INCOHERENTE: ampliar coherentemente a otros conflictos si se usan. |
+| operaciones_sincronizacion | esquema, UUID, actor/empresa/dispositivo/secuencia, hash, contenido, resultado/revisión | Conservar v1/v2; añadir v3 de compra y estados nuevos negociados en protocolo 0.4.0. SQL previo restringía CONFLICTO a TIEMPO_INCOHERENTE: ampliar coherentemente a otros conflictos si se usan. |
 | referencias_horarias | actor/dispositivo, hora central/local/monótona, validez | Tolerancia de reloj configurable; no confiar en hora local arbitraria. |
 | outbox / notificaciones / dispositivos_push | evento, empresa, destinatario, recurso/revisión, canal, intentos, estado, leído_en | Dedupe evento/usuario/canal; secretos de suscripción protegidos; logout desvincula dispositivo apropiadamente. |
 | consultas_reporte / resultados | actor, empresa, tipo/filtros autorizados, snapshot, fecha, hash, formato | Snapshot consistente entre pantalla/exportación; paginación y límites; retención explícita. |
@@ -41,7 +41,19 @@ Los nombres siguientes son lógicos propuestos: adaptar al esquema real sin dupl
 ## Almacenamiento local
 IndexedDB y SQLite conservan tablas/stores equivalentes: catalogos_versiones, productos, variantes, colores/componentes, promociones, sucursales, sesión mínima, operaciones_pendientes, líneas_operación, resultados, turnos, cupos, ventas_locales, detalles_venta_local, comprobantes_locales y cursores. FK/índices o integridad equivalente; transacciones para venta+cola+cupo. Sesión sensible en mecanismo adecuado de plataforma; no trasladar datos de tarjeta a SQLite.
 
-Migrations locales versionadas y recuperables preservan pendientes v1; no limpiar datos para actualizar esquema. Backend acepta v1 y v2 según tipo. Datos de empresa/usuario permanecen aislados en logout/cambio de cuenta. En Flutter usar persistencia real SQLite; SharedPreferences/BolsaStore RAM no la sustituyen.
+Migraciones locales versionadas y recuperables preservan pendientes v1/v2; no limpiar datos para actualizar esquema. Backend propuesto acepta v1/v2 y v3 solo para compra según capacidad negociada. Datos de empresa/usuario permanecen aislados en logout/cambio de cuenta. En Flutter usar persistencia real SQLite; SharedPreferences/BolsaStore RAM no la sustituyen.
 
 ## Políticas de integridad financiera
+
+### Extensión 0.3.1 propuesta
+
+| Agregado | Campos principales | Restricción |
+|---|---|---|
+| Métodos preparados | ID opaco, empresa/cliente, referencias Customer/PaymentMethod/SetupIntent protegidas solo en backend, estado LISTO/REVOCADO | Vinculación verificada online; referencia única; no guardar datos sensibles en cliente local. |
+| Consentimientos de compra | operación, huella, desglose BOB/USD, tasa, condiciones, vigencia, método preparado, aceptación | Inmutables y específicos; no sustituyen sesión válida; revocación/cancelación auditada. |
+| Orden/cobro/cancelación | operación v3, revisión, clave estable del proveedor, inicio/captura, cancelación en carrera | Un único cargo efectivo y una obligación CU27 por causa; reconciliar antes de resolver carrera. |
+| Compromiso/salida | pedido, variante/sucursal, cantidad, estado, referencia captura y entrega | Oferta sin compromiso; compromiso posterior a captura; salida física única al entregar. Cupos caja excluyentes. |
+| Devolución/inspección | motivo código/descripción, condición física, responsabilidad tienda, resolución financiera, política versión | Recibo en custodia no vendible; evaluación tardía autorizada; reposición solo por movimiento aprobado. |
+
+IndexedDB y SQLite se expanden con compra/consentimiento/referencia opaca aislados por empresa/usuario/dispositivo y lápida de cancelación durable. La transacción local guarda compra, consentimiento y cola juntos. Reinicio/timeout consulta el UUID anterior; logout oculta datos y suspende sync sin purgar obligación. Conservar v1/v2 legibles y no convertirlos en cobro automático.
 Pedido pagado sin stock genera obligación de devolución sin movimiento de salida de prenda. Devolución física apta genera reposición sin afirmar que dinero se devolvió. Diferencia a favor cliente se asigna por resolución única a saldo o reembolso. Reembolso parcial se calcula del neto histórico prorrateado; último remanente absorbe ajuste de centavos sin exceder captura. En pago mixto, reintegrar saldo hasta componente original y dinero por pago de origen. No usar nueva tasa USD para reembolsar.

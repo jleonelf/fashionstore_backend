@@ -1,4 +1,4 @@
-# Paquetes funcionales — 0.3.0
+# Paquetes funcionales — 0.3.1
 
 | CU | Paquete dueño | Canales |
 |---|---|---|
@@ -6,7 +6,7 @@
 | CU02 | `identidad_empresas` | B/W online; M consulta capacidades |
 | CU03 | `catalogo` | B/W/M: descarga online, lectura local offline |
 | CU04 | `reservas_traslados` | B/W/M |
-| CU05 | `ventas_pagos` | B/W/M; preparación offline, pasarela online |
+| CU05 | `ventas_pagos` | B/W/M; preparación offline y cobro conectado condicionado |
 | CU06 | `caja_offline` | B/W/M; habilitación online |
 | CU07 | `caja_offline` | B/W/M; efectivo y entrega sin red |
 | CU08 | `posventa` | B/W gestión; W/M cliente consulta, acepta, paga y recibe avisos online |

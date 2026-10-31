@@ -1,5 +1,5 @@
 {
-  "version": "0.3.0",
+  "version": "0.4.0",
   "base": "/api/v1",
   "tipo": "especificacion documental; no OpenAPI ejecutable",
   "casos": [
@@ -81,16 +81,17 @@
       "rutas": [
         "POST /sincronizacion/operaciones",
         "GET /compras/{pedido_id}",
-        "POST /compras/{pedido_id}/aceptar-oferta"
+        "POST /compras/{pedido_id}/aceptar-oferta",
+        "POST /sincronizacion/operaciones/{operacion_id}/cancelar"
       ],
       "estado_rutas": "propuestas/adaptaciones; cotejar checkout actual y conservar adaptadores",
       "autorizacion": "Cliente",
-      "entrada": "SOLICITAR_COMPRA v2: líneas/precios vistos, sucursal, modalidad y dirección si aplica. Posteriormente oferta aceptada y consentimiento de pago.",
+      "entrada": "SOLICITAR_COMPRA v3 con autorizacion_cobro? completa: consentimiento específico, huella, importes/moneda/tasa/condiciones/vigencia y preparacion_pago_id opaco; v1/v2 se conservan.",
       "salida": "pedido_id, estado_pedido, estado_pago, estado_cumplimiento, oferta_revision, total_bob; reembolso_id cuando corresponda.",
       "errores": [
-        "Aclaración A-PAGO-01: interpretación operativa revisable mañana; sustituye regla antigua de stock apartado antes de cobrar.",
-        "Compra de cliente sin red queda registrada, pero no declara cobro Stripe offline. Efectivo físico corresponde CU07/CU19.",
-        "Pago incierto mantiene EN_VERIFICACION; no crear otro cobro ni decidir reembolso antes de conciliar."
+        "PENDIENTE_INTERVENCION sin método/consentimiento suficiente; REQUIERE_NUEVA_ACEPTACION si cambia oferta; REQUIERE_ACCION_CLIENTE si proveedor exige autenticación",
+        "Cancelación previa al cobro lo impide; carrera: CANCELACION_EN_CONCILIACION y CU27 si captura tardía",
+        "Pago incierto se concilia sin nuevo cobro"
       ],
       "idempotencia": "Idempotency-Key en mutaciones; UUID propio en sync; eventos proveedor deduplicados",
       "contrato_detalle": "casos/CU05.md"
@@ -145,13 +146,14 @@
       ],
       "estado_rutas": "propuestas/adaptaciones; cotejar checkout actual y conservar adaptadores",
       "autorizacion": "Cliente; encargado de sucursal o administrador autorizado",
-      "entrada": "venta_id, unidades_originales[{detalle_venta_id,cantidad}], reemplazos deseados, sucursal_id, modalidad_reemplazo, direccion, motivo, revision.",
+      "entrada": "venta_id, unidades originales/reemplazos, sucursal, modalidad, motivo_codigo TALLA|COLOR|DEFECTO_FABRICACION|PRODUCTO_INCORRECTO|OTRO, motivo_descripcion si OTRO, revision; inspección y responsabilidad separadas.",
       "salida": "cambio_id, nota_codigo, estado, vence_espera_en, oferta_revision, valor_reconocido_bob, diferencia_bob, pago/reembolso/saldo, entrega_id y comprobantes.",
       "errores": [
         "Vencen 7 días sin sustituto o cliente no acepta: ofrecer elección de otra prenda, saldo o reembolso elegible; no retener indefinidamente ni imponer saldo.",
         "Una nota solicitada a tiempo conserva elegibilidad aunque el trámite termine después del día 15.",
         "Fallo atribuible a tienda: envío del reemplazo a cargo de tienda; cambio voluntario: cliente paga tarifa informada y aceptada. Traslado interno siempre a cargo de empresa.",
-        "Cotización vencida exige nueva aceptación; pago incierto no permite entregar ni liberar compromiso ciegamente."
+        "Cotización vencida exige nueva aceptación; pago incierto no permite entregar ni liberar compromiso ciegamente.",
+        "Defecto/incumplimiento tardío: evaluación autorizada sin rechazo ni reembolso automático"
       ],
       "idempotencia": "Idempotency-Key en mutaciones; UUID propio en sync; eventos proveedor deduplicados",
       "contrato_detalle": "casos/CU08.md"
@@ -374,11 +376,11 @@
       ],
       "estado_rutas": "propuestas/adaptaciones; cotejar checkout actual y conservar adaptadores",
       "autorizacion": "Encargado o administrador empresarial autorizado; cliente solicita devolución",
-      "entrada": "tipo DEVOLUCION/MERMA, venta_id y líneas originales cuando corresponda, cantidades, motivo, condición, evidencia, revision.",
+      "entrada": "DEVOLUCION/MERMA, venta/unidades, motivo_codigo y motivo_descripcion si OTRO, evidencia, revision; inspección separa condicion_fisica, responsabilidad_tienda y resolución financiera.",
       "salida": "devolucion_id/merma_id, recepción, inspección, movimientos, importe_elegible y estado financiero enlazado.",
       "errores": [
-        "Fuera de política requiere excepción autorizada y auditada, no porcentaje improvisado.",
-        "Devolver prenda no demuestra devolución de dinero; estados separados."
+        "15 días voluntaria con comprobante e inspección; defecto/incumplimiento tardío a evaluación autorizada, sin resolución automática",
+        "Recepción queda en custodia y no repone stock vendible automáticamente"
       ],
       "idempotencia": "Idempotency-Key en mutaciones; UUID propio en sync; eventos proveedor deduplicados",
       "contrato_detalle": "casos/CU20.md"
@@ -398,8 +400,8 @@
       "entrada": "líneas[{variante_id,cantidad}], sucursal propuesta, modalidad RECOJO/DELIVERY, direccion, saldo_solicitado opcional.",
       "salida": "pedido_id, oferta, estado_pago, estado_cumplimiento, entrega propuesta, vínculo con CU05 si origen offline.",
       "errores": [
-        "Sin conexión guardar compra local no pagada; no guardar PAN/CVC ni simular pasarela aprobada.",
-        "Cambio de importe exige aceptación; no incrementar cobro automático al reconectar."
+        "Compra local no pagada puede conservar consentimiento y referencia opaca de método preparado; no PAN/CVC/client_secret",
+        "Cambio de importe, moneda, tasa/conversión o condiciones exige nueva aceptación antes de cobrar"
       ],
       "idempotencia": "Idempotency-Key en mutaciones; UUID propio en sync; eventos proveedor deduplicados",
       "contrato_detalle": "casos/CU21.md"
@@ -410,15 +412,19 @@
       "rutas": [
         "POST /pagos/stripe/intenciones",
         "GET /pagos/stripe/estado/{recurso_id}",
-        "POST /pagos/stripe/webhook"
+        "POST /pagos/stripe/webhook",
+        "POST /pagos/stripe/metodos/preparar",
+        "GET /pagos/stripe/metodos/{preparacion_pago_id}",
+        "POST /pagos/stripe/ordenes/{orden_pago_id}/continuar-accion"
       ],
       "estado_rutas": "propuestas/adaptaciones; cotejar checkout actual y conservar adaptadores",
       "autorizacion": "Cliente o personal autorizado inicia cobro propio; webhook firmado de Stripe sin sesión de cliente",
-      "entrada": "contexto PEDIDO/CAMBIO/RESERVA, recurso_id, oferta_revision, clave estable de orden de pago; no confiar en monto enviado por cliente.",
+      "entrada": "contexto, recurso_id, oferta_revision, Idempotency-Key; v3 incluye referencia opaca a método preparado y consentimiento específico. Monto calculado en servidor.",
       "salida": "orden_pago_id, estado, importe_bob, importe_usd, tasa_id, referencia_proveedor; client_secret solo al consumidor autorizado y nunca logs.",
       "errores": [
         "Stripe rechazado: conservar intento fallido; nuevo intento explícito y control de un único cobro efectivo.",
-        "Cobro tardío tras cancelación/vencimiento crea reembolso; no resucita entrega/stock por sí solo."
+        "Cobro tardío tras cancelación/vencimiento crea reembolso; no resucita entrega/stock por sí solo.",
+        "SCA: REQUIERE_ACCION_CLIENTE y notificación; cancelación/cobro se concilian sin duplicar"
       ],
       "idempotencia": "Idempotency-Key en mutaciones; UUID propio en sync; eventos proveedor deduplicados",
       "contrato_detalle": "casos/CU22.md"
@@ -510,7 +516,8 @@
       "errores": [
         "No hay pago capturado: cancelar intención/retención y documentar, no inventar un reembolso.",
         "Pago mixto: dinero al medio original y saldo restaurado; suma de reembolsos ejecutados+reservados no supera componente pagado.",
-        "Fallo de proveedor no significa deuda saldada. Política configurable se congela al aprobar; no alterar reclamos históricos."
+        "Fallo de proveedor no significa deuda saldada. Política configurable se congela al aprobar; no alterar reclamos históricos.",
+        "Defecto/incumplimiento tardío requiere evaluación autorizada; 48 h es objetivo interno configurable de inicio, sin garantía bancaria"
       ],
       "idempotencia": "Idempotency-Key en mutaciones; UUID propio en sync; eventos proveedor deduplicados",
       "contrato_detalle": "casos/CU27.md"
