@@ -1,5 +1,5 @@
 {
-  "catalogo_academico": 26,
+  "catalogo_academico": 27,
   "primera_presentacion": [
     "CU01",
     "CU02",
@@ -10,7 +10,7 @@
     "CU16",
     "CU18"
   ],
-  "nota": "LB identifica una función conservada fuera de los 26 prioritarios; no ordena eliminar código. No convertir IDs persistidos ni rutas por esta equivalencia.",
+  "nota": "CU01–CU26 conservan números; CU27 nuevo independiente. Las claves incluido_catalogo_26 de registros heredados conservan significado histórico, no describen el tamaño actual. No modificar IDs/rutas por numeración.",
   "equivalencias": [
     {
       "codigo_anterior": "CU01",
@@ -271,5 +271,10 @@
       "primera_presentacion": false,
       "nombre": "Configurar tasa de conversión BOB/USD"
     }
-  ]
+  ],
+  "version": "0.3.0",
+  "cu_nuevo_sin_equivalente_anterior": {
+    "codigo": "CU27",
+    "nombre": "Gestionar reembolsos"
+  }
 }
