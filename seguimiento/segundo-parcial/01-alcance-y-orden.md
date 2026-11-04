@@ -16,7 +16,9 @@
 
 Los lotes son unidades de implementación y revisión; pueden requerir varios commits coherentes por repositorio. La revisión backend/web puede marcar un **canal verificado**, pero **un CU se marca aceptado sólo cuando pasa su ficha en todos los canales asignados**. La entrega 1 se cierra tras E1-M, con los 14 aceptados, OpenAPI real, migración y datos existentes verificados, aislamiento entre dos empresas, reinicio offline y reenvío del mismo UUID.
 
-## Entrega 2: iniciar después del cierre de E1
+## Entrega 2: implementación autorizada tras la entrega técnica E1
+
+El propietario autorizó continuar E2 el 04/11/2026. La aceptación manual pendiente de E1 se lleva en paralelo y no se presume resuelta. El [encargo operativo E2](15-ejecucion-e2.md) sustituye la antigua puerta de esperar aceptación formal antes de escribir código E2; mantiene revisión y commits por grupos.
 
 | Lote | CU | Resultado necesario |
 |---|---|---|
@@ -27,7 +29,7 @@ Los lotes son unidades de implementación y revisión; pueden requerir varios co
 
 **E2-M, fase móvil final:** después de E2-B1…B4 en backend/Angular, completar Flutter para **CU05, CU08, CU09, CU20, CU21, CU22 y CU27** en su parte cliente. CU19, CU23, CU24, CU25, CU10 y CU11 no se convierten en pantallas móviles administrativas. Ver [matriz de canales](06-canales-y-cierre-movil.md).
 
-La preparación contractual de E2 puede leerse durante E1, pero no se acredita implementación E2 por código heredado o tablas ya creadas. Para compra digital, dinero capturado sin stock debe pasar a obligación de reembolso; el aviso de éxito sólo procede tras pago confirmado y asignación completa. E2 exige regresión de E1 y se cierra después de E2-M.
+No se acredita implementación E2 por código heredado o tablas ya creadas. Para compra digital, dinero capturado sin stock debe pasar a obligación de reembolso; el aviso de éxito sólo procede tras pago confirmado y asignación completa. E2 exige regresión de E1 y se cierra después de E2-M.
 
 ## Conteo sin duplicados
 

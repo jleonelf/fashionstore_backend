@@ -6,7 +6,7 @@
 - **Agente externo:** implementa el lote asignado en los repositorios afectados y deja un reporte de entrega con pruebas, cambios y pendientes.
 - **Codex:** al recibir la entrega, inspecciona el diff real, ejecuta verificaciones pertinentes, identifica defectos y actualiza `02-estado-cu.md` y `04-bitacora.md`. Sólo marca «Aceptado» con evidencia de todos los canales del CU.
 
-Las antiguas etiquetas de programadores A/B no asignan personas nuevas. El trabajo se mueve por **lotes backend/Angular E1-B1…E1-B5**, luego **E1-M Flutter**, y sólo tras cerrar E1 por E2-B1…E2-B4 y **E2-M Flutter**, según `01-alcance-y-orden.md` y `06-canales-y-cierre-movil.md`.
+Las antiguas etiquetas de programadores A/B no asignan personas nuevas. E1 se trabajó por lotes backend/Angular y después Flutter. El propietario autorizó E2 sobre la entrega técnica E1 versionada: B1…B4 backend/Angular y después E2-M Flutter; la aceptación manual E1 continúa en paralelo. Ver `01-alcance-y-orden.md`, `06-canales-y-cierre-movil.md` y `15-ejecucion-e2.md`.
 
 ## Ramas por lote
 
@@ -50,3 +50,7 @@ Cada cierre de turno deja aquí o en `04-bitacora.md`: rama y SHA actuales por r
 | `app-movil` | `refactor/paquetes-cu` | `41463a7` | 196 pruebas; `flutter analyze` limpio. |
 
 La instrucción previa «sin commit» describía entregas anteriores del agente; el propietario autorizó estos commits tras la revisión técnica. El registro de seguimiento tiene un commit backend separado cuyo SHA se consulta con `git log` al reanudar. No hubo push, merge ni despliegue. [Documento vigente y plan E2](14-entrega-e1-y-plan-e2.md).
+
+## Rama integral E2 y revisión de grupos
+
+El propietario solicitó implementar toda E2 con subagentes. Para este encargo se propone `feature/sp2-e2-integral` en cada repositorio afectado, desde los HEAD E1, en lugar de ramas simultáneas por lote dependiente. Los grupos B1/B2/B3/B4/M se separan por checkpoints y, tras revisión de Codex, por commits coherentes de avance. El agente implementador y sus subagentes no hacen commits. La autorización para comenzar E2 no equivale a aceptación manual de E1 ni a permiso de push/merge/despliegue. Ver [ejecución E2](15-ejecucion-e2.md).

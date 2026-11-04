@@ -15,6 +15,7 @@ La carpeta vive en el repositorio `backend` para que su historial pueda registra
 7. [Prompt inicial para agente externo](prompts/E1-B1-identidad.md), si el siguiente trabajo es el lote E1-B1.
 8. [Resolución técnica final de bloqueos E1](13-resolucion-final-bloqueos-e1.md): migraciones 0012–0013, conciliación supervisada, Kardex y estado de pruebas.
 9. [Entrega técnica E1 y plan E2](14-entrega-e1-y-plan-e2.md): commits reales, verificación final, límites manuales y orden de los 13 CU restantes. Es el estado vigente cuando difiere de auditorías previas.
+10. [Ejecución E2 con subagentes](15-ejecucion-e2.md) y [prompt integral listo para el agente](prompts/E2-implementacion-integral-subagentes.md): alcance, ramas, propietarios de archivos, puertas técnicas y reporte.
 
 ## Fuentes y prioridad
 
@@ -25,4 +26,4 @@ La carpeta vive en el repositorio `backend` para que su historial pueda registra
 
 ## Regla de actualización
 
-Al terminar cada lote, el agente externo entrega archivos cambiados, rutas/DTO, pruebas, limitaciones y ramas, sin declarar aceptación por sí mismo. El propietario avisa a Codex; Codex revisa código y pruebas, actualiza `02-estado-cu.md` y agrega una entrada en `04-bitacora.md`. Sólo los CU aceptados entran en un commit de lote revisado. Registrar hashes reales de los commits de cada repositorio después de crearlos. No inferir progreso por una tabla, una ruta, un test escrito o una respuesta del agente.
+Al terminar cada lote, el agente externo entrega archivos cambiados, rutas/DTO, pruebas, limitaciones y ramas, sin declarar aceptación por sí mismo ni hacer commits. El propietario avisa a Codex; Codex revisa código y pruebas, actualiza `02-estado-cu.md` y agrega una entrada en `04-bitacora.md`. Los grupos técnicamente revisados pueden entrar en commits de avance por canal; la aceptación completa del CU exige todos sus canales. Registrar hashes reales de los commits de cada repositorio después de crearlos. No inferir progreso por una tabla, una ruta, un test escrito o una respuesta del agente.

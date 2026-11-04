@@ -38,7 +38,7 @@ La etiqueta **B** es FastAPI, **W** Angular/PWA, **M** Flutter. «M consulta/con
 
 1. **E1-B1…B5:** implementar y revisar backend + Angular, incluyendo PWA. Registrar evidencia y commits de esos canales tras revisión, con los CU todavía abiertos donde falte Flutter.
 2. **E1-M:** revisar y completar sólo los 11 CU E1 con responsabilidad Flutter indicados arriba. Aprovechar el código móvil ya avanzado para CU03/04/16/18. Los CU sin M pueden aceptarse antes; E1 completa cuando los 14 pasan todos sus canales.
-3. **E2-B1…B4:** comenzar sólo tras cerrar E1, backend + Angular primero.
+3. **E2-B1…B4:** comenzar desde la entrega técnica E1 versionada por autorización del propietario del 04/11/2026, backend + Angular primero. La aceptación manual E1 sigue pendiente en paralelo; ver `15-ejecucion-e2.md`.
 4. **E2-M:** completar sólo los 7 CU E2 con responsabilidad Flutter. Cerrar E2 con regresión de E1 y sus 13 CU aceptados.
 
 La fase final de cada entrega permite posponer trabajo móvil **sin contar como completo un CU que todavía requiere móvil**. Si un servicio Flutter de lectura no necesita pantalla propia, su aceptación exige consumo real desde el flujo cliente y prueba de ámbito/estado, no un archivo de servicio sin uso.

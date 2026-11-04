@@ -1,6 +1,6 @@
 # Guía de reanudación para otro chat
 
-**Fecha de corte:** 04/11/2026. **Fuente operativa vigente:** [entrega técnica E1 y plan E2](14-entrega-e1-y-plan-e2.md). Contrato 0.3.2, protocolo 0.4.0.
+**Fecha de corte:** 04/11/2026. **Fuentes operativas vigentes:** [entrega técnica E1 y plan E2](14-entrega-e1-y-plan-e2.md) y [encargo de ejecución E2](15-ejecucion-e2.md). Contrato 0.3.2, protocolo 0.4.0.
 
 ## Estado comprobado
 
@@ -8,7 +8,7 @@
 - Backend: 122 pruebas aprobadas en copia PostgreSQL migrada 0010–0013. Frontend: 201 pruebas, build y TypeScript aprobados. Flutter: 196 pruebas y análisis estático aprobados. La aserción de selección de cupo tras conciliación parcial se corrigió y su widget pasó 2/2.
 - Base local: PostgreSQL `fashionstore_db` en `127.0.0.1:5432`, revisión Alembic `0013_cupo_merma_eventos_kardex`. Las migraciones versionadas están en `backend/alembic/versions`. Nunca asumir que la base sea un archivo SQLite.
 - La entrega técnica está registrada; la aceptación formal del propietario y recorridos manuales PWA/Android físico siguen pendientes. Las auditorías 12 y 13 son históricas; el documento 14 tiene prioridad para el estado de pruebas y Git.
-- E2 comprende 13 CU y aún no tiene implementación acreditada. Seguir el orden del documento 14. Backend y Angular primero; Flutter cliente al final. Caja Flutter CU06/CU07 pertenece a E1 y ya está en el commit móvil.
+- E2 comprende 13 CU y aún no tiene implementación acreditada. El propietario autorizó iniciar su implementación con subagentes; seguir documentos 14 y 15 y el [prompt integral](prompts/E2-implementacion-integral-subagentes.md). Backend y Angular primero; Flutter cliente al final. Caja Flutter CU06/CU07 pertenece a E1 y ya está en el commit móvil.
 
 ## Primeros pasos en un nuevo chat
 

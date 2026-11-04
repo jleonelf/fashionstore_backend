@@ -349,3 +349,9 @@ Agregar entradas al final; conservar decisiones y fallos anteriores. No guardar 
 - Verificación final independiente: backend **122 passed** (5 warnings) sobre copia PostgreSQL migrada 0010–0013; Angular/PWA **201/201**, build y TypeScript; Flutter **114 unit + 81 widget + 1 root = 196 passed** y `flutter analyze` limpio. Total: **519** pruebas. Índices Git sin errores de whitespace.
 - Commits de código/contratos E1: backend `8b42fef` en `feature/sp2-e1-b1-identidad`; frontend `1efa89f` en la misma rama; Flutter `41463a7` en `refactor/paquetes-cu`. La base local `fashionstore_db` permanece en Alembic 0013. No se hizo push, merge ni despliegue.
 - Se elaboró el [plan E2 por dependencia](14-entrega-e1-y-plan-e2.md) para los 13 CU restantes, con backend y Angular primero y Flutter cliente al final. La entrega técnica E1 está registrada; aceptación formal y recorridos manuales PWA/Android físico siguen pendientes. No se acredita implementación E2 por código heredado.
+
+## 04/11/2026 — Autorización y encargo integral E2
+
+- El propietario pidió iniciar la implementación de la segunda presentación con subagentes. Se documentaron [alcance operativo, dependencias, ramas, propiedad de archivos y checkpoints](15-ejecucion-e2.md) y un [prompt integral ejecutable](prompts/E2-implementacion-integral-subagentes.md).
+- E2 se inicia sobre los commits técnicos de E1; la aceptación manual de E1 sigue pendiente en paralelo. El implementador no hace commits. Codex revisará grupos completos y registrará commits de avance conforme a `03-ramas-y-commits.md`.
+- No se modificó código E2 ni se aplicaron nuevas migraciones al preparar este encargo.

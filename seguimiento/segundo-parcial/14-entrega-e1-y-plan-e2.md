@@ -42,8 +42,8 @@ Completar **CU05, CU08, CU09, CU20, CU21, CU22 y CU27** sólo en las responsabil
 
 ### Forma de trabajo y registro
 
-1. Antes de E2-B1, completar la inspección manual pendiente de E1 y registrar cualquier defecto real en `02-estado-cu.md`; la aceptación formal la comunica el propietario. La preparación contractual de E2 ya puede usarse.
-2. Crear ramas E2 por lote desde la base E1 revisada en cada repositorio afectado. Conservar los commits E1 y documentar el SHA de partida. No mezclar cambios de E2 con correcciones E1; si una corrección es necesaria, probarla y registrarla aparte.
+1. El propietario autorizó iniciar la implementación E2 el 04/11/2026 sobre la entrega técnica E1 versionada. La inspección manual pendiente de E1 sigue en paralelo; registrar y corregir aparte cualquier defecto real. La aceptación formal de E1 la comunica el propietario. El [encargo operativo E2](15-ejecucion-e2.md) define ramas, subagentes y checkpoints.
+2. Crear una rama de integración E2 en cada repositorio afectado desde la base E1 revisada y documentar el SHA de partida. Conservar los commits E1. Los grupos de CU se registrarán como commits revisados cuando corresponda; no mezclar correcciones E1 con E2.
 3. Para cada CU, contrastar ficha 0.3.2, OpenAPI real, reglas de estados y migración. Aplicar migraciones aditivas en copia de PostgreSQL con datos; probar rollback transaccional, idempotencia, concurrencia y aislamiento multitenant antes de habilitar el frontend.
 4. Registrar por lote: archivos, DTO/rutas, revisión Alembic, pruebas exactas, resultados, límites y hashes de backend/web. Un CU con responsabilidad móvil permanece abierto hasta E2-M. El propietario indica cuándo el agente externo terminó; Codex revisa y actualiza `02-estado-cu.md` y `04-bitacora.md`.
 5. No hacer push, merge ni despliegue por inferencia. El commit de este documento en backend registra sólo el seguimiento y el plan.
