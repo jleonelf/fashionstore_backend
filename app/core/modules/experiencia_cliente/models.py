@@ -10,6 +10,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    UniqueConstraint,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from backend.app.core.database import Base
@@ -26,10 +27,12 @@ class HistorialNavegacion(Base):
     __table_args__ = (
         Index("idx_navegacion_cliente_fecha", "cliente_id", "creada_en"),
         Index("idx_navegacion_evento", "evento"),
+        UniqueConstraint("id", "empresa_id", name="uq_historial_navegacion_id_empresa"),
         {"schema": "inteligencia"},
     )
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    empresa_id = Column(UUID(as_uuid=True), ForeignKey("organizacion.empresas.id"), nullable=False, index=True)
     cliente_id = Column(
         UUID(as_uuid=True), ForeignKey("seguridad.clientes.usuario_id"), nullable=True
     )
@@ -56,10 +59,12 @@ class SolicitudIA(Base):
         ),
         Index("idx_solicitudes_tipo_fecha", "tipo", "creada_en"),
         Index("idx_solicitudes_usuario", "usuario_id"),
+        UniqueConstraint("id", "empresa_id", name="uq_solicitudes_ia_id_empresa"),
         {"schema": "inteligencia"},
     )
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    empresa_id = Column(UUID(as_uuid=True), ForeignKey("organizacion.empresas.id"), nullable=False, index=True)
     usuario_id = Column(UUID(as_uuid=True), ForeignKey("seguridad.usuarios.id"), nullable=True)
     cliente_id = Column(
         UUID(as_uuid=True), ForeignKey("seguridad.clientes.usuario_id"), nullable=True

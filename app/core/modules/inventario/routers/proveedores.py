@@ -2,7 +2,7 @@ from typing import List
 from fastapi import APIRouter, Depends, status, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from backend.app.core.database import get_db
-from backend.app.core.dependencias import require_roles, get_usuario_actual
+from backend.app.core.dependencias import require_rol_empresarial
 from backend.app.core.modules.identidad_empresas.models import Usuario
 from backend.app.core.modules.inventario.schemas import ProveedorCrearDTO, ProveedorDTO
 from backend.app.core.modules.inventario.services.proveedor_service import ProveedorService
@@ -19,9 +19,9 @@ router = APIRouter()
 async def gestionarProveedores(
     datos: ProveedorCrearDTO,
     db: AsyncSession = Depends(get_db),
-    _admin: Usuario = Depends(require_roles("ADMINISTRADOR"))
+    _admin: Usuario = Depends(require_rol_empresarial("ADMINISTRADOR"))
 ) -> ProveedorDTO:
-    servicio = ProveedorService(db)
+    servicio = ProveedorService(db, empresa_id=_admin.empresa_id)
     return await servicio.crear(datos)
 
 @router.get(
@@ -33,7 +33,7 @@ async def gestionarProveedores(
 async def listarProveedores(
     solo_activos: bool = Query(False, description="Filtrar solo activos"),
     db: AsyncSession = Depends(get_db),
-    _user: Usuario = Depends(get_usuario_actual)
+    _user: Usuario = Depends(require_rol_empresarial("ADMINISTRADOR", "ENCARGADO"))
 ) -> List[ProveedorDTO]:
-    servicio = ProveedorService(db)
+    servicio = ProveedorService(db, empresa_id=_user.empresa_id)
     return await servicio.listar(solo_activos=solo_activos)

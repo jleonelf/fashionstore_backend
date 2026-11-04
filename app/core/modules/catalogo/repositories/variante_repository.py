@@ -36,8 +36,17 @@ class VarianteRepository:
         result = await self.db.execute(query)
         return result.scalars().first()
 
-    async def listar(self, producto_id: Optional[uuid.UUID] = None, solo_activas: bool = False, limit: int = 50, offset: int = 0) -> List[VarianteProducto]:
+    async def listar(
+        self,
+        producto_id: Optional[uuid.UUID] = None,
+        solo_activas: bool = False,
+        limit: int = 50,
+        offset: int = 0,
+        empresa_id: Optional[uuid.UUID] = None,
+    ) -> List[VarianteProducto]:
         q = select(VarianteProducto)
+        if empresa_id:
+            q = q.where(VarianteProducto.empresa_id == empresa_id)
         if producto_id:
             q = q.where(VarianteProducto.producto_id == producto_id)
         if solo_activas:

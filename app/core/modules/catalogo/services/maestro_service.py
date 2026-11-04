@@ -19,16 +19,22 @@ class MaestroService:
     Presentación gestionarMaestros() -> Controller MaestroService.crearTalla()/crearColor()/crearCategoria()/crearTemporada()/crearColeccion()
     -> Datos MaestroRepository.*
     """
-    def __init__(self, db: AsyncSession):
+    def __init__(self, db: AsyncSession, empresa_id: uuid.UUID | None = None):
         self.db = db
-        self.repo = MaestroRepository(db)
+        self.empresa_id = empresa_id
+        self.repo = MaestroRepository(db, empresa_id=empresa_id)
+
+    def _exigir_empresa(self) -> uuid.UUID:
+        if self.empresa_id is None:
+            raise HTTPException(status_code=400, detail="Usuario sin empresa asignada")
+        return self.empresa_id
 
     # ---------- Talla ----------
     async def crearTalla(self, dto: TallaCrearDTO) -> TallaDTO:
         existente = await self.repo.buscarTallaPorNombre(dto.nombre)
         if existente:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"Ya existe una talla con nombre '{dto.nombre.strip()}'")
-        talla = Talla(nombre=dto.nombre.strip(), orden=dto.orden, activo=dto.activo)
+        talla = Talla(empresa_id=self._exigir_empresa(), nombre=dto.nombre.strip(), orden=dto.orden, activo=dto.activo)
         await self.repo.crearTalla(talla)
         await self.db.commit()
         await self.db.refresh(talla)
@@ -67,7 +73,7 @@ class MaestroService:
         existente = await self.repo.buscarColorPorNombre(dto.nombre)
         if existente:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"Ya existe un color con nombre '{dto.nombre.strip()}'")
-        color = Color(nombre=dto.nombre.strip(), codigo_hex=dto.codigo_hex, activo=dto.activo)
+        color = Color(empresa_id=self._exigir_empresa(), nombre=dto.nombre.strip(), codigo_hex=dto.codigo_hex, activo=dto.activo)
         await self.repo.crearColor(color)
         await self.db.commit()
         await self.db.refresh(color)
@@ -110,7 +116,7 @@ class MaestroService:
         existente = await self.repo.buscarCategoriaPorNombreYPadre(dto.nombre, dto.categoria_padre_id)
         if existente:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"Ya existe una categoría con nombre '{dto.nombre.strip()}' bajo el mismo padre")
-        categoria = Categoria(nombre=dto.nombre.strip(), descripcion=dto.descripcion.strip() if dto.descripcion else None, categoria_padre_id=dto.categoria_padre_id, activo=dto.activo)
+        categoria = Categoria(empresa_id=self._exigir_empresa(), nombre=dto.nombre.strip(), descripcion=dto.descripcion.strip() if dto.descripcion else None, categoria_padre_id=dto.categoria_padre_id, activo=dto.activo)
         await self.repo.crearCategoria(categoria)
         await self.db.commit()
         await self.db.refresh(categoria)
@@ -160,7 +166,7 @@ class MaestroService:
         existente = await self.repo.buscarTemporadaPorNombre(dto.nombre)
         if existente:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"Ya existe una temporada con nombre '{dto.nombre.strip()}'")
-        temporada = Temporada(nombre=dto.nombre.strip(), fecha_inicio=dto.fecha_inicio, fecha_fin=dto.fecha_fin, activa=dto.activa)
+        temporada = Temporada(empresa_id=self._exigir_empresa(), nombre=dto.nombre.strip(), fecha_inicio=dto.fecha_inicio, fecha_fin=dto.fecha_fin, activa=dto.activa)
         await self.repo.crearTemporada(temporada)
         await self.db.commit()
         await self.db.refresh(temporada)
@@ -203,7 +209,7 @@ class MaestroService:
         existente = await self.repo.buscarColeccionPorNombre(dto.nombre)
         if existente:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"Ya existe una colección con nombre '{dto.nombre.strip()}'")
-        coleccion = Coleccion(nombre=dto.nombre.strip(), descripcion=dto.descripcion.strip() if dto.descripcion else None, activa=dto.activa)
+        coleccion = Coleccion(empresa_id=self._exigir_empresa(), nombre=dto.nombre.strip(), descripcion=dto.descripcion.strip() if dto.descripcion else None, activa=dto.activa)
         await self.repo.crearColeccion(coleccion)
         await self.db.commit()
         await self.db.refresh(coleccion)

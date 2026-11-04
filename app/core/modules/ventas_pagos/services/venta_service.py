@@ -381,6 +381,7 @@ class VentaService:
             await PagoService(self.db, self.reloj).registrarCaja(
                 venta_id=venta.id, metodo=dto.metodo, monto=total,
                 pagado_en=ahora, clave=clave, digest=digest,
+                empresa_id=venta.empresa_id,
             )
 
         if reserva is not None:

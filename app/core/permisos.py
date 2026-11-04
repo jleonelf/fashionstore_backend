@@ -11,11 +11,15 @@ from backend.app.core.modules.identidad_empresas.models import Usuario
 
 
 def es_admin(usuario: Usuario) -> bool:
-    return (usuario.rol.nombre if usuario.rol else "").upper() == "ADMINISTRADOR"
+    return rol_de(usuario) == "ADMINISTRADOR"
 
 
 def rol_de(usuario: Usuario) -> str:
-    return (usuario.rol.nombre if usuario.rol else "").upper()
+    try:
+        rol = usuario.rol
+    except Exception:
+        rol = getattr(usuario, "__dict__", {}).get("rol")
+    return (rol.nombre if rol else "").upper()
 
 
 def exigir_roles(usuario: Usuario, *roles: str) -> None:

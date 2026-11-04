@@ -211,7 +211,103 @@ class ProductoDTO(BaseModel):
     imagenes: List[ImagenProductoDTO] = Field(default_factory=list)
     temporada_ids: List[uuid.UUID] = Field(default_factory=list)
     coleccion_ids: List[uuid.UUID] = Field(default_factory=list)
+    variantes: List[VariantePublicaDTO] = Field(default_factory=list)
 
+
+
+class ComponenteColorDTO(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    color_id: uuid.UUID
+    orden: int
+
+
+class ColorCompuestoDTO(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: uuid.UUID
+    nombre: str
+    componentes: List[ComponenteColorDTO] = Field(default_factory=list)
+
+
+class SucursalPublicaDTO(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: uuid.UUID
+    nombre: str
+    ciudad_nombre: Optional[str] = None
+
+
+class PromocionDescargaDTO(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: uuid.UUID
+    tipo: str
+    valor: str = Field(..., description="Valor decimal string BOB o porcentaje")
+    cantidad_minima: int = Field(default=1, ge=1)
+    vigente_desde: Optional[datetime] = None
+    vigente_hasta: Optional[datetime] = None
+    variante_ids: List[uuid.UUID] = Field(default_factory=list)
+
+
+class DisponibilidadSucursalItemDTO(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    sucursal_id: uuid.UUID
+    disponible_conocido: int = Field(..., ge=0)
+    actualizado_en: datetime
+
+
+class PromocionAplicableDTO(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: uuid.UUID
+    codigo: str
+    nombre: str
+    tipo: str
+    valor: str = Field(..., description="Valor decimal string BOB")
+    cantidad_minima: int = Field(default=1, ge=1)
+    vigente_desde: Optional[datetime] = None
+    vigente_hasta: Optional[datetime] = None
+
+
+class VariantePublicaDTO(BaseModel):
+    """Vista pública de variante: sin costo_promedio, costo_ultimo u otros campos internos."""
+
+    model_config = ConfigDict(from_attributes=True)
+    id: uuid.UUID
+    producto_id: uuid.UUID
+    talla_id: uuid.UUID
+    color_id: uuid.UUID
+    sku: str
+    codigo_barras: Optional[str] = None
+    precio: Decimal
+    peso_gramos: Optional[int] = None
+    recurso_prueba_virtual: Optional[str] = None
+    activa: bool
+    precio_bob: Optional[str] = None
+    disponibilidad: int = 0
+    disponibilidad_por_sucursal: List[DisponibilidadSucursalItemDTO] = Field(default_factory=list)
+    promociones: List[PromocionAplicableDTO] = Field(default_factory=list)
+
+
+class ProductoPublicoDTO(BaseModel):
+    """Vista pública del catálogo: sin proveedores, costos ni campos internos."""
+
+    model_config = ConfigDict(from_attributes=True)
+    id: uuid.UUID
+    categoria_id: Optional[uuid.UUID] = None
+    nombre: str
+    descripcion: Optional[str] = None
+    genero: Optional[str] = None
+    marca: Optional[str] = None
+    precio_base: Decimal
+    imagenes: List[ImagenProductoDTO] = Field(default_factory=list)
+    temporada_ids: List[uuid.UUID] = Field(default_factory=list)
+    coleccion_ids: List[uuid.UUID] = Field(default_factory=list)
+    variantes: List[VariantePublicaDTO] = Field(default_factory=list)
+
+
+
+class CatalogoProductosPaginadoDTO(BaseModel):
+    total: int
+    limit: int
+    offset: int
+    items: List[ProductoPublicoDTO]
 
 # ---------- Variante ----------
 class VarianteCrearDTO(BaseModel):
@@ -269,6 +365,9 @@ class VarianteDTO(BaseModel):
     activa: bool
 
 
+# (VariantePublicaDTO unificada definida arriba)
+
+
 # ---------- Opciones de Filtro y Disponibilidad (CU06) ----------
 class FiltroOpcionItemDTO(BaseModel):
     id: uuid.UUID
@@ -323,6 +422,7 @@ class PromocionCrearDTO(BaseModel):
     descripcion: Optional[str] = None
     tipo: TipoPromocion
     valor: Decimal = Field(..., ge=0)
+    cantidad_minima: int = Field(default=1, ge=1, description="Cantidad minima para aplicar")
     activa: bool = True
     vigencia_inicio: Optional[datetime] = None
     vigencia_fin: Optional[datetime] = None
@@ -334,6 +434,7 @@ class PromocionActualizarDTO(BaseModel):
     descripcion: Optional[str] = None
     tipo: Optional[TipoPromocion] = None
     valor: Optional[Decimal] = Field(None, ge=0)
+    cantidad_minima: Optional[int] = Field(None, ge=1)
     activa: Optional[bool] = None
     vigencia_inicio: Optional[datetime] = None
     vigencia_fin: Optional[datetime] = None
@@ -347,6 +448,7 @@ class PromocionDTO(BaseModel):
     descripcion: Optional[str] = None
     tipo: str
     valor: Decimal
+    cantidad_minima: int = Field(default=1, ge=1)
     activa: bool
     vigencia_inicio: Optional[datetime] = None
     vigencia_fin: Optional[datetime] = None
@@ -363,3 +465,107 @@ class PromocionListaDTO(BaseModel):
 
 class AsociarVariantesDTO(BaseModel):
     variante_ids: List[uuid.UUID] = Field(..., min_length=1)
+
+
+# ---------- Descarga offline de catálogo (CU03 / CU16) ----------
+class CatalogoDescargaVarianteDTO(BaseModel):
+    model_config = ConfigDict(
+        from_attributes=True,
+        json_schema_extra={
+            "example": {
+                "id": "70000000-0000-4000-8000-000000000001",
+                "sku": "VES-NEG-M",
+                "codigo_barras": "7771234567890",
+                "talla_id": "a0000000-0000-4000-8000-000000000001",
+                "talla": "M",
+                "color_id": "b0000000-0000-4000-8000-000000000001",
+                "color": "Negro",
+                "codigo_hex": "#000000",
+                "precio_bob": "120.00",
+                "disponibilidad": 5,
+            }
+        },
+    )
+
+    id: uuid.UUID
+    sku: str
+    codigo_barras: Optional[str] = None
+    talla_id: uuid.UUID
+    talla: str
+    color_id: uuid.UUID
+    color: str
+    codigo_hex: Optional[str] = None
+    precio_bob: str = Field(..., description="Precio público en BOB con dos posiciones decimales, nunca float")
+    disponibilidad: int = Field(default=0, ge=0, description="Disponibilidad pública conocida en el ámbito de sucursal")
+    disponibilidad_por_sucursal: List[DisponibilidadSucursalItemDTO] = Field(default_factory=list)
+
+
+class CatalogoDescargaProductoDTO(BaseModel):
+    model_config = ConfigDict(
+        from_attributes=True,
+        json_schema_extra={
+            "example": {
+                "id": "c0000000-0000-4000-8000-000000000001",
+                "categoria_id": "d0000000-0000-4000-8000-000000000001",
+                "categoria": "Vestidos",
+                "nombre": "Vestido Casual Elegante",
+                "descripcion": "Vestido midi de temporada en tela fresca",
+                "genero": "Femenino",
+                "marca": "FashionStore",
+                "precio_base_bob": "120.00",
+                "imagenes": [],
+                "temporadas": ["Primavera 2026"],
+                "colecciones": ["Colección Urbana"],
+                "variantes": [],
+            }
+        },
+    )
+
+    id: uuid.UUID
+    categoria_id: Optional[uuid.UUID] = None
+    categoria: Optional[str] = None
+    nombre: str
+    descripcion: Optional[str] = None
+    genero: Optional[str] = None
+    marca: Optional[str] = None
+    precio_base_bob: str = Field(..., description="Precio base en BOB con dos posiciones decimales")
+    imagenes: List[ImagenProductoDTO] = Field(default_factory=list)
+    temporadas: List[str] = Field(default_factory=list)
+    colecciones: List[str] = Field(default_factory=list)
+    variantes: List[CatalogoDescargaVarianteDTO] = Field(default_factory=list)
+
+
+class CatalogoDescargaDTO(BaseModel):
+    model_config = ConfigDict(
+        from_attributes=True,
+        json_schema_extra={
+            "example": {
+                "empresa_id": "20000000-0000-4000-8000-000000000001",
+                "empresa_codigo": "fashionstore",
+                "empresa_nombre": "FashionStore",
+                "sucursal_id": None,
+                "ambito_sucursal": "TODAS",
+                "catalogo_version": 1,
+                "descargado_en": "2026-10-25T17:00:00Z",
+                "total_productos": 1,
+                "total_variantes": 1,
+                "productos": [],
+            }
+        },
+    )
+
+    empresa_id: uuid.UUID
+    empresa_codigo: str
+    empresa_nombre: str
+    sucursal_id: Optional[uuid.UUID] = None
+    ambito_sucursal: Optional[str] = Field("TODAS", description="Ámbito de sucursal de la descarga: 'TODAS' o nombre/código de la sucursal específica")
+    catalogo_version: int = Field(..., ge=1, description="Versión monótona del catálogo publicada por la empresa")
+    generado_en: datetime = Field(..., description="Fecha y hora UTC del corte central del catálogo")
+    descargado_en: datetime = Field(..., description="Alias heredado de generado_en")
+    ambito_sucursales: List[uuid.UUID] = Field(default_factory=list)
+    sucursales: List[SucursalPublicaDTO] = Field(default_factory=list)
+    colores: List[ColorCompuestoDTO] = Field(default_factory=list)
+    promociones: List[PromocionDescargaDTO] = Field(default_factory=list)
+    total_productos: int = Field(..., ge=0)
+    total_variantes: int = Field(..., ge=0)
+    productos: List[CatalogoDescargaProductoDTO] = Field(default_factory=list)

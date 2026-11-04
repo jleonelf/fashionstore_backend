@@ -3,7 +3,7 @@ from typing import List
 from fastapi import APIRouter, Depends, status, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from backend.app.core.database import get_db
-from backend.app.core.dependencias import require_roles, get_usuario_actual
+from backend.app.core.dependencias import require_rol_empresarial
 from backend.app.core.modules.identidad_empresas.models import Usuario
 from backend.app.core.modules.catalogo.schemas import (
     TallaCrearDTO, TallaDTO, TallaActualizarDTO,
@@ -32,9 +32,9 @@ router_colecciones = APIRouter()
 async def crearTalla(
     datos: TallaCrearDTO,
     db: AsyncSession = Depends(get_db),
-    _admin: Usuario = Depends(require_roles("ADMINISTRADOR"))
+    _admin: Usuario = Depends(require_rol_empresarial("ADMINISTRADOR"))
 ) -> TallaDTO:
-    servicio = MaestroService(db)
+    servicio = MaestroService(db, empresa_id=_admin.empresa_id)
     return await servicio.crearTalla(datos)
 
 @router_tallas.get(
@@ -73,9 +73,9 @@ async def actualizarTalla(
     talla_id: uuid.UUID,
     datos: TallaActualizarDTO,
     db: AsyncSession = Depends(get_db),
-    _admin: Usuario = Depends(require_roles("ADMINISTRADOR"))
+    _admin: Usuario = Depends(require_rol_empresarial("ADMINISTRADOR"))
 ) -> TallaDTO:
-    servicio = MaestroService(db)
+    servicio = MaestroService(db, empresa_id=_admin.empresa_id)
     return await servicio.actualizarTalla(talla_id, datos)
 
 @router_tallas.patch(
@@ -87,9 +87,10 @@ async def actualizarTalla(
 async def toggleTalla(
     talla_id: uuid.UUID,
     activo: bool = Query(..., description="Nuevo estado activo"),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    _admin: Usuario = Depends(require_rol_empresarial("ADMINISTRADOR")),
 ) -> TallaDTO:
-    servicio = MaestroService(db)
+    servicio = MaestroService(db, empresa_id=_admin.empresa_id)
     return await servicio.actualizarTalla(talla_id, TallaActualizarDTO(activo=activo))
 
 # ---------- COLORES ----------
@@ -103,9 +104,9 @@ async def toggleTalla(
 async def crearColor(
     datos: ColorCrearDTO,
     db: AsyncSession = Depends(get_db),
-    _admin: Usuario = Depends(require_roles("ADMINISTRADOR"))
+    _admin: Usuario = Depends(require_rol_empresarial("ADMINISTRADOR"))
 ) -> ColorDTO:
-    servicio = MaestroService(db)
+    servicio = MaestroService(db, empresa_id=_admin.empresa_id)
     return await servicio.crearColor(datos)
 
 @router_colores.get(
@@ -144,9 +145,9 @@ async def actualizarColor(
     color_id: uuid.UUID,
     datos: ColorActualizarDTO,
     db: AsyncSession = Depends(get_db),
-    _admin: Usuario = Depends(require_roles("ADMINISTRADOR"))
+    _admin: Usuario = Depends(require_rol_empresarial("ADMINISTRADOR"))
 ) -> ColorDTO:
-    servicio = MaestroService(db)
+    servicio = MaestroService(db, empresa_id=_admin.empresa_id)
     return await servicio.actualizarColor(color_id, datos)
 
 @router_colores.patch(
@@ -158,9 +159,10 @@ async def actualizarColor(
 async def toggleColor(
     color_id: uuid.UUID,
     activo: bool = Query(...),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    _admin: Usuario = Depends(require_rol_empresarial("ADMINISTRADOR")),
 ) -> ColorDTO:
-    servicio = MaestroService(db)
+    servicio = MaestroService(db, empresa_id=_admin.empresa_id)
     return await servicio.actualizarColor(color_id, ColorActualizarDTO(activo=activo))
 
 # ---------- CATEGORIAS ----------
@@ -174,9 +176,9 @@ async def toggleColor(
 async def crearCategoria(
     datos: CategoriaCrearDTO,
     db: AsyncSession = Depends(get_db),
-    _admin: Usuario = Depends(require_roles("ADMINISTRADOR"))
+    _admin: Usuario = Depends(require_rol_empresarial("ADMINISTRADOR"))
 ) -> CategoriaDTO:
-    servicio = MaestroService(db)
+    servicio = MaestroService(db, empresa_id=_admin.empresa_id)
     return await servicio.crearCategoria(datos)
 
 @router_categorias.get(
@@ -215,9 +217,9 @@ async def actualizarCategoria(
     categoria_id: uuid.UUID,
     datos: CategoriaActualizarDTO,
     db: AsyncSession = Depends(get_db),
-    _admin: Usuario = Depends(require_roles("ADMINISTRADOR"))
+    _admin: Usuario = Depends(require_rol_empresarial("ADMINISTRADOR"))
 ) -> CategoriaDTO:
-    servicio = MaestroService(db)
+    servicio = MaestroService(db, empresa_id=_admin.empresa_id)
     return await servicio.actualizarCategoria(categoria_id, datos)
 
 @router_categorias.patch(
@@ -229,9 +231,10 @@ async def actualizarCategoria(
 async def toggleCategoria(
     categoria_id: uuid.UUID,
     activo: bool = Query(...),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    _admin: Usuario = Depends(require_rol_empresarial("ADMINISTRADOR")),
 ) -> CategoriaDTO:
-    servicio = MaestroService(db)
+    servicio = MaestroService(db, empresa_id=_admin.empresa_id)
     return await servicio.actualizarCategoria(categoria_id, CategoriaActualizarDTO(activo=activo))
 
 # ---------- TEMPORADAS ----------
@@ -245,9 +248,9 @@ async def toggleCategoria(
 async def crearTemporada(
     datos: TemporadaCrearDTO,
     db: AsyncSession = Depends(get_db),
-    _admin: Usuario = Depends(require_roles("ADMINISTRADOR"))
+    _admin: Usuario = Depends(require_rol_empresarial("ADMINISTRADOR"))
 ) -> TemporadaDTO:
-    servicio = MaestroService(db)
+    servicio = MaestroService(db, empresa_id=_admin.empresa_id)
     return await servicio.crearTemporada(datos)
 
 @router_temporadas.get(
@@ -286,9 +289,9 @@ async def actualizarTemporada(
     temporada_id: uuid.UUID,
     datos: TemporadaActualizarDTO,
     db: AsyncSession = Depends(get_db),
-    _admin: Usuario = Depends(require_roles("ADMINISTRADOR"))
+    _admin: Usuario = Depends(require_rol_empresarial("ADMINISTRADOR"))
 ) -> TemporadaDTO:
-    servicio = MaestroService(db)
+    servicio = MaestroService(db, empresa_id=_admin.empresa_id)
     return await servicio.actualizarTemporada(temporada_id, datos)
 
 @router_temporadas.patch(
@@ -300,9 +303,10 @@ async def actualizarTemporada(
 async def toggleTemporada(
     temporada_id: uuid.UUID,
     activa: bool = Query(...),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    _admin: Usuario = Depends(require_rol_empresarial("ADMINISTRADOR")),
 ) -> TemporadaDTO:
-    servicio = MaestroService(db)
+    servicio = MaestroService(db, empresa_id=_admin.empresa_id)
     return await servicio.actualizarTemporada(temporada_id, TemporadaActualizarDTO(activa=activa))
 
 # ---------- COLECCIONES ----------
@@ -316,9 +320,9 @@ async def toggleTemporada(
 async def crearColeccion(
     datos: ColeccionCrearDTO,
     db: AsyncSession = Depends(get_db),
-    _admin: Usuario = Depends(require_roles("ADMINISTRADOR"))
+    _admin: Usuario = Depends(require_rol_empresarial("ADMINISTRADOR"))
 ) -> ColeccionDTO:
-    servicio = MaestroService(db)
+    servicio = MaestroService(db, empresa_id=_admin.empresa_id)
     return await servicio.crearColeccion(datos)
 
 @router_colecciones.get(
@@ -357,9 +361,9 @@ async def actualizarColeccion(
     coleccion_id: uuid.UUID,
     datos: ColeccionActualizarDTO,
     db: AsyncSession = Depends(get_db),
-    _admin: Usuario = Depends(require_roles("ADMINISTRADOR"))
+    _admin: Usuario = Depends(require_rol_empresarial("ADMINISTRADOR"))
 ) -> ColeccionDTO:
-    servicio = MaestroService(db)
+    servicio = MaestroService(db, empresa_id=_admin.empresa_id)
     return await servicio.actualizarColeccion(coleccion_id, datos)
 
 @router_colecciones.patch(
@@ -371,9 +375,10 @@ async def actualizarColeccion(
 async def toggleColeccion(
     coleccion_id: uuid.UUID,
     activa: bool = Query(...),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    _admin: Usuario = Depends(require_rol_empresarial("ADMINISTRADOR")),
 ) -> ColeccionDTO:
-    servicio = MaestroService(db)
+    servicio = MaestroService(db, empresa_id=_admin.empresa_id)
     return await servicio.actualizarColeccion(coleccion_id, ColeccionActualizarDTO(activa=activa))
 
 router = APIRouter()

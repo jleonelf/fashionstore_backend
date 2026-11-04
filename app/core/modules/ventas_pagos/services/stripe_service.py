@@ -118,7 +118,7 @@ class StripeService:
                     await self.db.flush()
             else:
                 pago = Pago(
-                    contexto="VENTA", reserva_id=None, venta_id=venta.id,
+                    contexto="VENTA", empresa_id=venta.empresa_id, reserva_id=None, venta_id=venta.id,
                     metodo="STRIPE_TEST", tipo_pago="PAGO",
                     monto=venta.total, no_reembolsable=False, estado="PENDIENTE",
                     referencia_externa=inten.id, proveedor_pago="STRIPE_TEST",

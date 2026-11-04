@@ -10,11 +10,12 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, Header, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from backend.app.core.database import get_db
-from backend.app.core.dependencias import get_usuario_actual, require_roles
+from backend.app.core.dependencias import get_usuario_actual, require_rol_empresarial, require_roles
 from backend.app.core.idempotencia import validar_clave_idempotencia
 from backend.app.core.modules.identidad_empresas.models import Usuario
 from backend.app.core.modules.reservas_traslados.schemas import (
     ExpiracionResultadoDTO,
+    ReservaCancelarDTO,
     ReservaCrearDTO,
     ReservaDTO,
     ReservaListaDTO,
@@ -34,7 +35,7 @@ router = APIRouter()
 async def confirmarReserva(
     datos: ReservaCrearDTO,
     db: AsyncSession = Depends(get_db),
-    usuario: Usuario = Depends(require_roles("CLIENTE")),
+    usuario: Usuario = Depends(require_rol_empresarial("CLIENTE")),
     clave_idempotencia: Optional[str] = Header(None, alias="Idempotency-Key"),
 ) -> ReservaDTO:
     clave = validar_clave_idempotencia(clave_idempotencia)
@@ -118,16 +119,27 @@ async def consultarReserva(
 @router.patch(
     "/{reserva_id}/cancelar",
     response_model=ReservaDTO,
-    summary="Cancelar reserva (CU08)",
-    description="Cliente propietario o Encargado/Administrador de la sucursal destino, solo en PENDIENTE_TRASLADO/PENDIENTE/PREPARADA (otro estado -> 409). Libera inventario segun ubicacion con Kardex LIBERACION_RESERVA. Repetir es idempotente.",
+    status_code=status.HTTP_200_OK,
+    summary="Cancelar reserva (CU08 / CU18)",
+    description=(
+        "Cliente propietario o Encargado/Administrador de la sucursal destino. "
+        "Idempotente con header Idempotency-Key y control de concurrencia optimista mediante revision opcional. "
+        "Si ya está CANCELADA devolver HTTP 200 idempotente sin duplicar Kardex. "
+        "Si revision no coincide, responder 409 Conflict."
+    ),
 )
 async def cancelarReserva(
     reserva_id: uuid.UUID,
+    datos: Optional[ReservaCancelarDTO] = None,
+    clave_idempotencia: Optional[str] = Header(None, alias="Idempotency-Key"),
     db: AsyncSession = Depends(get_db),
     usuario: Usuario = Depends(get_usuario_actual),
 ) -> ReservaDTO:
     servicio = ReservaService(db)
-    return await servicio.cancelar(usuario, reserva_id)
+    revision = datos.revision if datos is not None else None
+    return await servicio.cancelar(
+        usuario, reserva_id, revision=revision, clave_idempotencia=clave_idempotencia
+    )
 
 
 @router.patch(
@@ -171,4 +183,4 @@ async def ejecutarExpiracion(
     _staff: Usuario = Depends(require_roles("ENCARGADO", "ADMINISTRADOR")),
 ) -> ExpiracionResultadoDTO:
     servicio = ReservaService(db)
-    return await servicio.expirarVencidas()
+    return await servicio.expirarVencidas(empresa_id=_staff.empresa_id)

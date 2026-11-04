@@ -3,13 +3,16 @@ from fastapi import APIRouter
 # Paquetes canónicos bajo backend/app/core/modules
 from backend.app.core.modules.identidad_empresas.routers import (
     clientes,
+    empresas,
     roles,
     sesion,
+    suscripciones,
     usuarios,
 )
 from backend.app.core.modules.organizacion.routers import (
     ciudades,
     sucursales,
+    tasas_cambio,
 )
 from backend.app.core.modules.inventario.routers import (
     inventario,
@@ -25,9 +28,11 @@ from backend.app.core.modules.catalogo.routers import (
 )
 from backend.app.core.modules.reservas_traslados.routers import (
     reservas,
+    sincronizacion,
     traslados,
 )
 from backend.app.core.modules.ventas_pagos.routers import (
+    cajas,
     carritos,
     entregas,
     pagos,
@@ -49,15 +54,18 @@ from backend.app.core.modules.experiencia_cliente.routers import (
 
 api_router = APIRouter()
 
-# Identidad y Empresas (CU01, CU02)
-api_router.include_router(clientes.router, prefix="/clientes", tags=["Clientes"])
+# Identidad y Empresas (CU01, CU02, CU13, CU14)
+api_router.include_router(suscripciones.router, prefix="", tags=["Suscripciones CU02"])
+api_router.include_router(empresas.router, prefix="/empresas", tags=["Empresas CU01"])
+api_router.include_router(clientes.router, prefix="/clientes", tags=["Clientes CU13"])
 api_router.include_router(sesion.router, prefix="/sesion", tags=["Autenticación"])
 api_router.include_router(usuarios.router, prefix="/usuarios", tags=["Gestión de Usuarios"])
 api_router.include_router(roles.router, prefix="/roles", tags=["Roles"])
 
-# Organización (CU03)
+# Organización (CU03, CU12, CU15)
 api_router.include_router(ciudades.router, prefix="/ciudades", tags=["Ciudades"])
 api_router.include_router(sucursales.router, prefix="/sucursales", tags=["Sucursales y Delivery"])
+api_router.include_router(tasas_cambio.router, prefix="/plataforma/tasas-cambio", tags=["Tasa de Cambio BOB/USD CU12"])
 
 # Inventario (CU04, CU07)
 api_router.include_router(proveedores.router, prefix="/proveedores", tags=["Proveedores"])
@@ -75,11 +83,13 @@ api_router.include_router(variantes.router, prefix="/variantes", tags=["Variante
 api_router.include_router(catalogo.router, prefix="/catalogo", tags=["Catálogo CU06"])
 api_router.include_router(promociones.router, prefix="/promociones", tags=["Promociones CU22"])
 
-# Reservas y Traslados (CU08, CU09, CU10, CU24)
-api_router.include_router(reservas.router, prefix="/reservas", tags=["Reservas CU08/CU10/CU24"])
+# Reservas y Traslados (CU08, CU09, CU10, CU24, CU04, CU18)
+api_router.include_router(reservas.router, prefix="/reservas", tags=["Reservas CU08/CU10/CU24/CU18"])
 api_router.include_router(traslados.router, prefix="/traslados", tags=["Traslados CU09"])
+api_router.include_router(sincronizacion.router, prefix="/sincronizacion", tags=["Sincronización CU04"])
 
 # Ventas y Pagos (CU11, CU13, CU14, CU15, CU16)
+api_router.include_router(cajas.router, prefix="", tags=["Cajas Offline CU06/CU07"])
 api_router.include_router(pagos.router, prefix="/pagos", tags=["Pagos y Adelantos CU11"])
 api_router.include_router(ventas.router, prefix="/ventas", tags=["Venta Presencial CU11"])
 api_router.include_router(carritos.router, prefix="/carritos", tags=["Carrito y Checkout CU14"])

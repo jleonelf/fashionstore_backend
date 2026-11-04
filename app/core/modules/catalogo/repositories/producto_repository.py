@@ -15,18 +15,34 @@ class ProductoRepository:
     def __init__(self, db: AsyncSession):
         self.db = db
 
-    async def buscarPorId(self, producto_id: uuid.UUID) -> Optional[Producto]:
+    async def buscarPorId(
+        self, producto_id: uuid.UUID, empresa_id: Optional[uuid.UUID] = None
+    ) -> Optional[Producto]:
         q = select(Producto).options(selectinload(Producto.imagenes)).where(Producto.id == producto_id)
+        if empresa_id is not None:
+            q = q.where(Producto.empresa_id == empresa_id)
         result = await self.db.execute(q)
         return result.scalars().first()
 
-    async def buscarPorNombre(self, nombre: str) -> Optional[Producto]:
+    async def buscarPorNombre(
+        self, nombre: str, empresa_id: Optional[uuid.UUID] = None
+    ) -> Optional[Producto]:
         q = select(Producto).where(Producto.nombre.ilike(nombre.strip()))
+        if empresa_id is not None:
+            q = q.where(Producto.empresa_id == empresa_id)
         result = await self.db.execute(q)
         return result.scalars().first()
 
-    async def listar(self, solo_activos: bool = False, limit: int = 50, offset: int = 0) -> List[Producto]:
+    async def listar(
+        self,
+        solo_activos: bool = False,
+        limit: int = 50,
+        offset: int = 0,
+        empresa_id: Optional[uuid.UUID] = None,
+    ) -> List[Producto]:
         q = select(Producto).options(selectinload(Producto.imagenes))
+        if empresa_id is not None:
+            q = q.where(Producto.empresa_id == empresa_id)
         if solo_activos:
             q = q.where(Producto.activo == True)
         q = q.order_by(Producto.nombre).limit(limit).offset(offset)
@@ -59,7 +75,8 @@ class ProductoRepository:
         coleccion_id: Optional[uuid.UUID] = None,
         busqueda: Optional[str] = None,
         codigo_hex: Optional[str] = None,
-        filtros: Optional[Dict[str, Any]] = None
+        filtros: Optional[Dict[str, Any]] = None,
+        empresa_id: Optional[uuid.UUID] = None,
     ) -> List[Producto]:
         """
         CU06 - buscarConFiltros completo: filtra productos por categoria, talla, color, temporada, coleccion, precio, texto, genero, marca.
@@ -131,6 +148,17 @@ class ProductoRepository:
             q = q.join(ProductoColeccion, ProductoColeccion.producto_id == Producto.id)
             q = q.where(ProductoColeccion.coleccion_id == coleccion_id)
 
+        if filtros and "empresa_id" in filtros and empresa_id is None:
+            empresa_id = filtros.get("empresa_id")
+
+        if empresa_id:
+            if isinstance(empresa_id, str):
+                try:
+                    empresa_id = uuid.UUID(empresa_id)
+                except Exception:
+                    pass
+            q = q.where(Producto.empresa_id == empresa_id)
+
         if solo_activos:
             q = q.where(Producto.activo == True)
         if texto:
@@ -152,6 +180,23 @@ class ProductoRepository:
         if precio_max is not None:
             q = q.where(Producto.precio_base <= precio_max)
         q = q.order_by(Producto.nombre).limit(limit).offset(offset)
+        result = await self.db.execute(q)
+        return list(result.scalars().all())
+
+    async def obtenerInstantaneaDescarga(
+        self, empresa_id: uuid.UUID
+    ) -> List[Producto]:
+        q = (
+            select(Producto)
+            .options(
+                selectinload(Producto.imagenes),
+                selectinload(Producto.categoria),
+                selectinload(Producto.variantes).selectinload(VarianteProducto.talla),
+                selectinload(Producto.variantes).selectinload(VarianteProducto.color),
+            )
+            .where(Producto.empresa_id == empresa_id, Producto.activo == True)
+            .order_by(Producto.nombre)
+        )
         result = await self.db.execute(q)
         return list(result.scalars().all())
 

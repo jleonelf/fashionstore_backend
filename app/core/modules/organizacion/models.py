@@ -1,15 +1,16 @@
-"""Modelos del paquete organizacional (CU03 / RF03).
+"""Modelos del paquete organizacional (CU03 / CU15 / CU12 / RF03).
 
-Define las entidades Ciudad y Sucursal con configuración de tarifas y adelantos.
+Define las entidades Ciudad, Sucursal y TasaCambio.
 """
 import uuid
 from sqlalchemy import (
     Column, String, Text, Boolean, SmallInteger, Numeric, ForeignKey,
-    UniqueConstraint, CheckConstraint,
+    UniqueConstraint, CheckConstraint, Index, Integer, DateTime, text,
 )
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 from backend.app.core.database import Base
+from backend.app.core.reloj import utcnow
 
 
 class Ciudad(Base):
@@ -26,7 +27,11 @@ class Ciudad(Base):
 class Sucursal(Base):
     __tablename__ = "sucursales"
     __table_args__ = (
-        UniqueConstraint("ciudad_id", "nombre", name="uq_sucursales_ciudad_nombre"),
+        UniqueConstraint("id", "empresa_id", name="uq_sucursales_id_empresa"),
+        Index(
+            "uq_sucursales_empresa_ciudad_nombre", "empresa_id", "ciudad_id",
+            text("lower(nombre)"), unique=True,
+        ),
         CheckConstraint(
             "modalidad_adelanto IS NULL OR modalidad_adelanto IN ('MONTO_FIJO','PORCENTAJE')",
             name="ck_sucursales_modalidad_adelanto",
@@ -44,6 +49,9 @@ class Sucursal(Base):
     )
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    empresa_id = Column(
+        UUID(as_uuid=True), ForeignKey("organizacion.empresas.id"), nullable=False, index=True
+    )
     ciudad_id = Column(UUID(as_uuid=True), ForeignKey("organizacion.ciudades.id"), nullable=False)
     nombre = Column(String(100), nullable=False)
     direccion = Column(Text, nullable=False)
@@ -55,9 +63,30 @@ class Sucursal(Base):
     anillo_maximo_delivery = Column(SmallInteger, nullable=False, default=10)
     delivery_activo = Column(Boolean, nullable=False, default=True)
     activa = Column(Boolean, nullable=False, default=True)
+    revision = Column(Integer, nullable=False, default=1)
     # Politica de adelanto por sucursal (decision 13, RN-03)
     adelanto_activo = Column(Boolean, nullable=False, default=False)
     modalidad_adelanto = Column(String(20), nullable=True)
     valor_adelanto = Column(Numeric(12, 2), nullable=False, default=0)
 
     ciudad = relationship("Ciudad", back_populates="sucursales")
+
+
+class TasaCambio(Base):
+    """CU12: Tasa de conversión oficial BOB/USD de la plataforma con vigencias no solapadas."""
+    __tablename__ = "tasas_cambio"
+    __table_args__ = (
+        CheckConstraint("version > 0", name="ck_tasas_cambio_version_pos"),
+        CheckConstraint("tasa_bob_por_usd > 0", name="ck_tasas_cambio_tasa_pos"),
+        CheckConstraint("vigente_hasta IS NULL OR vigente_desde < vigente_hasta", name="ck_tasas_cambio_vigencia"),
+        {"schema": "plataforma"},
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    version = Column(Integer, nullable=False, unique=True)
+    tasa_bob_por_usd = Column(Numeric(18, 8), nullable=False)
+    vigente_desde = Column(DateTime(timezone=True), nullable=False)
+    vigente_hasta = Column(DateTime(timezone=True), nullable=True)
+    motivo = Column(Text, nullable=False)
+    creada_por = Column(UUID(as_uuid=True), ForeignKey("seguridad.usuarios.id"), nullable=True)
+    creada_en = Column(DateTime(timezone=True), default=utcnow, nullable=False)

@@ -14,8 +14,9 @@ class ProductoService:
     Controller ProductoService.crear()/actualizar() para CU05
     Presentación gestionarProductos() -> Controller ProductoService.* -> Datos ProductoRepository.*
     """
-    def __init__(self, db: AsyncSession):
+    def __init__(self, db: AsyncSession, empresa_id: uuid.UUID | None = None):
         self.db = db
+        self.empresa_id = empresa_id
         self.producto_repo = ProductoRepository(db)
         self.maestro_repo = MaestroRepository(db)
         self.proveedor_repo = ProveedorRepository(db)
@@ -23,25 +24,25 @@ class ProductoService:
     async def _validar_referencias(self, dto: ProductoCrearDTO):
         if dto.categoria_id:
             cat = await self.maestro_repo.buscarCategoriaPorId(dto.categoria_id)
-            if not cat:
+            if not cat or cat.empresa_id != self.empresa_id:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Categoría no encontrada")
             if not cat.activo:
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Categoría inactiva")
         if dto.proveedor_principal_id:
             prov = await self.proveedor_repo.buscarPorId(dto.proveedor_principal_id)
-            if not prov:
+            if not prov or prov.empresa_id != self.empresa_id:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Proveedor principal no encontrado")
             if not prov.activo:
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Proveedor inactivo")
         for tid in dto.temporada_ids:
             temp = await self.maestro_repo.buscarTemporadaPorId(tid)
-            if not temp:
+            if not temp or temp.empresa_id != self.empresa_id:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Temporada {tid} no encontrada")
             if not temp.activa:
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Temporada {temp.nombre} inactiva")
         for cid in dto.coleccion_ids:
             col = await self.maestro_repo.buscarColeccionPorId(cid)
-            if not col:
+            if not col or col.empresa_id != self.empresa_id:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Colección {cid} no encontrada")
             if not col.activa:
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Colección {col.nombre} inactiva")
@@ -57,9 +58,12 @@ class ProductoService:
                             img.es_principal = False
 
     async def crear(self, dto: ProductoCrearDTO) -> ProductoDTO:
+        if self.empresa_id is None:
+            raise HTTPException(status_code=400, detail="Usuario sin empresa asignada")
         await self._validar_referencias(dto)
         try:
             producto = Producto(
+                empresa_id=self.empresa_id,
                 nombre=dto.nombre.strip(),
                 descripcion=dto.descripcion.strip() if dto.descripcion else None,
                 categoria_id=dto.categoria_id,
@@ -118,14 +122,16 @@ class ProductoService:
         )
 
     async def actualizar(self, producto_id: uuid.UUID, dto: ProductoActualizarDTO) -> ProductoDTO:
-        producto = await self.producto_repo.buscarPorId(producto_id)
+        if self.empresa_id is None:
+            raise HTTPException(status_code=400, detail="Usuario sin empresa asignada")
+        producto = await self.producto_repo.buscarPorId(producto_id, empresa_id=self.empresa_id)
         if not producto:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Producto no encontrado")
 
         if "categoria_id" in dto.model_fields_set:
             if dto.categoria_id:
                 cat = await self.maestro_repo.buscarCategoriaPorId(dto.categoria_id)
-                if not cat:
+                if not cat or cat.empresa_id != self.empresa_id:
                     raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Categoría no encontrada")
                 if not cat.activo:
                     raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Categoría inactiva")
@@ -136,7 +142,7 @@ class ProductoService:
         if "proveedor_principal_id" in dto.model_fields_set:
             if dto.proveedor_principal_id:
                 prov = await self.proveedor_repo.buscarPorId(dto.proveedor_principal_id)
-                if not prov:
+                if not prov or prov.empresa_id != self.empresa_id:
                     raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Proveedor principal no encontrado")
                 producto.proveedor_principal_id = dto.proveedor_principal_id
             else:
@@ -188,7 +194,7 @@ class ProductoService:
                 if dto.temporada_ids:
                     for tid in dto.temporada_ids:
                         temp = await self.maestro_repo.buscarTemporadaPorId(tid)
-                        if not temp:
+                        if not temp or temp.empresa_id != self.empresa_id:
                             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Temporada {tid} no encontrada")
                     await self.producto_repo.asociarTemporadas(producto.id, dto.temporada_ids)
 
@@ -197,7 +203,7 @@ class ProductoService:
                 if dto.coleccion_ids:
                     for cid in dto.coleccion_ids:
                         col = await self.maestro_repo.buscarColeccionPorId(cid)
-                        if not col:
+                        if not col or col.empresa_id != self.empresa_id:
                             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Colección {cid} no encontrada")
                     await self.producto_repo.asociarColecciones(producto.id, dto.coleccion_ids)
 

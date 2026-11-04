@@ -2,7 +2,7 @@
 import uuid
 from datetime import datetime
 from decimal import Decimal
-from typing import List, Optional
+from typing import List, Optional, Union
 from pydantic import BaseModel, Field, ConfigDict
 
 # ---------- Reservas ----------
@@ -46,17 +46,21 @@ class TrasladoResumenDTO(BaseModel):
 class ReservaDTO(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: uuid.UUID
+    empresa_id: uuid.UUID
     cliente_id: uuid.UUID
     sucursal_destino_id: uuid.UUID
     codigo: str
     estado: str
+    revision: int = 1
     fecha_creacion: datetime
     fecha_visita: Optional[datetime] = None
     vence_en: datetime
+    origen_plazo_en: Optional[datetime] = None
+    operacion_sincronizacion_id: Optional[uuid.UUID] = None
     observacion: Optional[str] = None
     adelanto_modalidad: Optional[str] = None
-    adelanto_valor: Optional[Decimal] = None
-    adelanto_monto: Optional[Decimal] = None
+    adelanto_valor: Optional[Union[str, Decimal]] = None
+    adelanto_monto: Optional[Union[str, Decimal]] = None
     preparada_en: Optional[datetime] = None
     atendida_en: Optional[datetime] = None
     preparada_por: Optional[uuid.UUID] = None
@@ -64,6 +68,12 @@ class ReservaDTO(BaseModel):
     detalles: List[DetalleReservaDTO] = Field(default_factory=list)
     traslados: List[TrasladoResumenDTO] = Field(default_factory=list)
 
+
+
+
+
+class ReservaCancelarDTO(BaseModel):
+    revision: Optional[int] = Field(None, ge=1, description="Revision actual conocida por el cliente")
 
 class ReservaListaDTO(BaseModel):
     total: int

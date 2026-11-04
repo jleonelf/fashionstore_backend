@@ -33,14 +33,14 @@ class PromocionService:
         self.variante_repo = VarianteRepository(db)
 
     def _exigir_admin(self, usuario: Usuario) -> None:
-        if not es_admin(usuario):
+        if not es_admin(usuario) or usuario.empresa_id is None:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Solo el Administrador gestiona promociones",
             )
 
-    async def _a_dto(self, promo_id: uuid.UUID) -> PromocionDTO:
-        promo = await self.repo.buscarPorId(promo_id)
+    async def _a_dto(self, promo_id: uuid.UUID, empresa_id: uuid.UUID) -> PromocionDTO:
+        promo = await self.repo.buscarPorId(promo_id, empresa_id=empresa_id)
         if promo is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Promoción no encontrada")
         variantes = await self.repo.variantesDe(promo.id)
@@ -71,13 +71,15 @@ class PromocionService:
         fin = entrada_local_a_utc(dto.vigencia_fin) if dto.vigencia_fin else None
         self._validar_vigencia(inicio, fin)
         self._validar_valor(dto.tipo, dto.valor)
-        if await self.repo.buscarPorCodigo(dto.codigo) is not None:
+        if await self.repo.buscarPorCodigo(dto.codigo, empresa_id=usuario.empresa_id) is not None:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Código de promoción duplicado")
         for vid in dto.variante_ids:
-            if await self.variante_repo.buscarPorId(vid) is None:
+            variante = await self.variante_repo.buscarPorId(vid)
+            if variante is None or variante.empresa_id != usuario.empresa_id:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Variante {vid} no encontrada")
         try:
             promo = Promocion(
+                empresa_id=usuario.empresa_id,
                 codigo=dto.codigo, nombre=dto.nombre, descripcion=dto.descripcion,
                 tipo=dto.tipo, valor=dto.valor, activa=dto.activa,
                 vigencia_inicio=inicio, vigencia_fin=fin,
@@ -87,14 +89,14 @@ class PromocionService:
             for vid in dto.variante_ids:
                 await self.repo.asociar(promo.id, vid)
             await self.db.commit()
-            return await self._a_dto(promo.id)
+            return await self._a_dto(promo.id, usuario.empresa_id)
         except IntegrityError:
             await self.db.rollback()
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Promoción duplicada")
 
     async def actualizar(self, usuario: Usuario, promo_id: uuid.UUID, dto: PromocionActualizarDTO) -> PromocionDTO:
         self._exigir_admin(usuario)
-        promo = await self.repo.buscarPorId(promo_id)
+        promo = await self.repo.buscarPorId(promo_id, empresa_id=usuario.empresa_id)
         if promo is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Promoción no encontrada")
         try:
@@ -116,7 +118,7 @@ class PromocionService:
             self._validar_valor(promo.tipo, Decimal(str(promo.valor)))
             await self.db.flush()
             await self.db.commit()
-            return await self._a_dto(promo.id)
+            return await self._a_dto(promo.id, usuario.empresa_id)
         except HTTPException:
             await self.db.rollback()
             raise
@@ -126,7 +128,7 @@ class PromocionService:
 
     async def eliminar(self, usuario: Usuario, promo_id: uuid.UUID) -> None:
         self._exigir_admin(usuario)
-        promo = await self.repo.buscarPorId(promo_id)
+        promo = await self.repo.buscarPorId(promo_id, empresa_id=usuario.empresa_id)
         if promo is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Promoción no encontrada")
         await self.db.delete(promo)
@@ -136,32 +138,37 @@ class PromocionService:
         rol = (usuario.rol.nombre if usuario.rol else "").upper()
         if rol not in ("ADMINISTRADOR", "ENCARGADO"):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Solo Administración")
-        items, total = await self.repo.listar(solo_activas=solo_activas, limit=limit, offset=offset)
+        if usuario.empresa_id is None:
+            raise HTTPException(status_code=400, detail="Usuario sin empresa asignada")
+        items, total = await self.repo.listar(solo_activas=solo_activas, limit=limit, offset=offset, empresa_id=usuario.empresa_id)
         return {
             "total": total, "limit": limit, "offset": offset,
-            "items": [await self._a_dto(p.id) for p in items],
+            "items": [await self._a_dto(p.id, usuario.empresa_id) for p in items],
         }
 
     async def obtener(self, usuario: Usuario, promo_id: uuid.UUID) -> PromocionDTO:
         rol = (usuario.rol.nombre if usuario.rol else "").upper()
         if rol not in ("ADMINISTRADOR", "ENCARGADO"):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Solo Administración")
-        return await self._a_dto(promo_id)
+        if usuario.empresa_id is None:
+            raise HTTPException(status_code=400, detail="Usuario sin empresa asignada")
+        return await self._a_dto(promo_id, usuario.empresa_id)
 
     async def asociar(self, usuario: Usuario, promo_id: uuid.UUID, dto: AsociarVariantesDTO) -> PromocionDTO:
         self._exigir_admin(usuario)
-        promo = await self.repo.buscarPorId(promo_id)
+        promo = await self.repo.buscarPorId(promo_id, empresa_id=usuario.empresa_id)
         if promo is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Promoción no encontrada")
         try:
             for vid in dto.variante_ids:
-                if await self.variante_repo.buscarPorId(vid) is None:
+                variante = await self.variante_repo.buscarPorId(vid)
+                if variante is None or variante.empresa_id != usuario.empresa_id:
                     raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Variante {vid} no encontrada")
                 existentes = await self.repo.variantesDe(promo.id)
                 if vid not in existentes:
                     await self.repo.asociar(promo.id, vid)
             await self.db.commit()
-            return await self._a_dto(promo.id)
+            return await self._a_dto(promo.id, usuario.empresa_id)
         except HTTPException:
             await self.db.rollback()
             raise
@@ -171,10 +178,12 @@ class PromocionService:
 
     async def desasociar(self, usuario: Usuario, promo_id: uuid.UUID, variante_id: uuid.UUID) -> PromocionDTO:
         self._exigir_admin(usuario)
+        if await self.repo.buscarPorId(promo_id, empresa_id=usuario.empresa_id) is None:
+            raise HTTPException(status_code=404, detail="Promoción no encontrada")
         if not await self.repo.desasociar(promo_id, variante_id):
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Asociación no encontrada")
         await self.db.commit()
-        return await self._a_dto(promo_id)
+        return await self._a_dto(promo_id, usuario.empresa_id)
 
     # ---------- motor de descuentos (usado por checkout CU14) ----------
     async def mejorDescuento(

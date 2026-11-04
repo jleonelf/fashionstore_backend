@@ -19,6 +19,7 @@ class AdelantoCrearDTO(BaseModel):
 class PagoDTO(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: uuid.UUID
+    empresa_id: Optional[uuid.UUID] = None
     contexto: str
     reserva_id: Optional[uuid.UUID] = None
     venta_id: Optional[uuid.UUID] = None
@@ -237,6 +238,136 @@ class TransicionPedidoDTO(BaseModel):
     ]
 
 
+
+
+# ---------- Schemas CU06 y CU07: Caja Offline ----------
+
+class CupoItemDTO(BaseModel):
+    variante_id: uuid.UUID = Field(..., description="ID de la variante")
+    cantidad: int = Field(..., gt=0, description="Cantidad exclusiva para la caja")
+
+
+class TurnoCrearDTO(BaseModel):
+    caja_id: str = Field(..., max_length=80, description="Código de la caja física")
+    dispositivo_id: uuid.UUID = Field(..., description="Identificador único del dispositivo")
+    sucursal_id: uuid.UUID = Field(..., description="Sucursal de operación")
+    cupos: List[CupoItemDTO] = Field(..., min_length=1, description="Lista de cupos solicitados")
+    revision: int = Field(1, ge=1, description="Revisión de la caja/sucursal")
+
+
+class CupoRespuestaDTO(BaseModel):
+    variante_id: uuid.UUID
+    sku: Optional[str] = None
+    producto_nombre: Optional[str] = None
+    otorgado: int
+    consumido: int = 0
+    liberado: int = 0
+    mermado: int = 0
+    precio_autorizado_bob: Decimal
+
+
+class TurnoHabilitacionDTO(BaseModel):
+    turno_id: uuid.UUID
+    habilitacion_id: uuid.UUID
+    caja_codigo: str
+    dispositivo_id: uuid.UUID
+    sucursal_id: uuid.UUID
+    cajero_id: uuid.UUID
+    estado: str
+    inicio_en: datetime
+    vence_en: datetime
+    version_precios: str
+    revision: int
+    cupos: List[CupoRespuestaDTO]
+    snapshot: Optional[dict] = None
+
+
+class VentaOfflineLineaDTO(BaseModel):
+    variante_id: uuid.UUID
+    cantidad: int = Field(..., gt=0)
+    precio_autorizado_bob: Decimal = Field(..., ge=0)
+
+
+class VentaOfflineCrearDTO(BaseModel):
+    operacion_id: uuid.UUID = Field(..., description="UUID único durable de la venta offline")
+    secuencia_local: int = Field(1, ge=1)
+    vendida_local_en: datetime
+    entregada_local_en: datetime
+    version_precios: str
+    lineas: List[VentaOfflineLineaDTO] = Field(..., min_length=1)
+    total_bob: Decimal = Field(..., ge=0)
+    efectivo_recibido_bob: Decimal = Field(..., ge=0)
+    cambio_entregado_bob: Decimal = Field(Decimal("0.00"), ge=0)
+    cliente_id: Optional[uuid.UUID] = None
+
+
+class VentaOfflineResultadoDTO(BaseModel):
+    resultado: str = "REGISTRADA_CENTRAL"
+    operacion_id: uuid.UUID
+    venta_id: uuid.UUID
+    numero: str
+    total_bob: Decimal
+    comprobante_id: uuid.UUID
+    recibida_central_en: datetime
+    cupos_restantes: List[dict]
+
+
+class TurnoCerrarDTO(BaseModel):
+    revision: int = Field(..., ge=1, description="Revisión actual del turno de caja")
+    ultima_secuencia_local: Optional[int] = Field(
+        None, ge=0, description="Última secuencia generada localmente por la caja"
+    )
+    total_operaciones_locales: Optional[int] = Field(
+        None, ge=0, description="Total de ventas generadas localmente"
+    )
+    operaciones_pendientes: Optional[List[uuid.UUID]] = Field(
+        None, description="Lista de identificadores de ventas pendientes de sincronizar"
+    )
+    arqueo_efectivo_bob: Optional[Decimal] = Field(
+        None, ge=0, description="Arqueo físico de efectivo contado en caja"
+    )
+    arqueo_declarado_bob: Optional[Decimal] = Field(
+        None, ge=0, description="Arqueo declarado de efectivo contado en caja"
+    )
+    supervision_forzada: Optional[bool] = Field(
+        False, description="Autorización explícita de supervisión para cierre forzado"
+    )
+    motivo_supervision: Optional[str] = Field(
+        None, description="Motivo documentado en caso de supervisión forzada"
+    )
+    descarte_venta_fisica: Optional[bool] = Field(
+        False, description="En cierre forzado, confirma descarte explícito de ventas físicas no registradas para liberar cupo"
+    )
+    evidencia_cierre: Optional[dict] = Field(
+        None, description="Evidencia estructurada del arqueo/cierre supervisado"
+    )
+    ajustes_inventario: Optional[dict] = Field(
+        None, description="Detalle de ajustes o mermas de inventario verificados"
+    )
+
+
+class TurnoCerradoDTO(BaseModel):
+    turno_id: uuid.UUID
+    estado: str
+    cerrado_en: Optional[datetime] = None
+    revision: int
+    cupos_devueltos: List[dict] = Field(default_factory=list)
+    cupos_retenidos: List[dict] = Field(default_factory=list)
+    cerrado_por_id: Optional[uuid.UUID] = None
+    motivo_supervision: Optional[str] = None
+    supervision_forzada: Optional[bool] = False
+    arqueo_declarado_bob: Optional[Decimal] = None
+    evidencia_cierre: Optional[dict] = None
+    ajustes_inventario: Optional[dict] = None
+    evento_id: Optional[uuid.UUID] = None
+
+
+class TurnoRecuperarDTO(BaseModel):
+    revision: int = Field(..., ge=1)
+    motivo: str = Field(..., min_length=3)
+    evidencia: Optional[str] = None
+
+
 __all__ = [
     "MetodoCaja",
     "EstadoPagoStripe",
@@ -266,4 +397,14 @@ __all__ = [
     "PedidoDTO",
     "PedidoListaDTO",
     "TransicionPedidoDTO",
+    "CupoItemDTO",
+    "TurnoCrearDTO",
+    "CupoRespuestaDTO",
+    "TurnoHabilitacionDTO",
+    "VentaOfflineLineaDTO",
+    "VentaOfflineCrearDTO",
+    "VentaOfflineResultadoDTO",
+    "TurnoCerrarDTO",
+    "TurnoCerradoDTO",
+    "TurnoRecuperarDTO",
 ]

@@ -52,6 +52,11 @@ class Settings(BaseSettings):
     GEMINI_MODEL: str = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
     GEMINI_TIMEOUT_SECONDS: int = int(os.getenv("GEMINI_TIMEOUT_SECONDS", "8"))
 
+    # Sincronización offline (CU04 / C34 / 0.3.2)
+    SINCRONIZACION_POLITICA_VERSION: int = int(os.getenv("SINCRONIZACION_POLITICA_VERSION", "1"))
+    SINCRONIZACION_DURACION_HORAS: int = int(os.getenv("SINCRONIZACION_DURACION_HORAS", "8"))
+    SINCRONIZACION_TOLERANCIA_SEGUNDOS: int = int(os.getenv("SINCRONIZACION_TOLERANCIA_SEGUNDOS", "300"))
+
     @property
     def sync_database_url(self) -> str:
         if self.DATABASE_URL:

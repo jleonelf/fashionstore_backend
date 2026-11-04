@@ -1,61 +1,81 @@
+from decimal import Decimal
+from typing import Literal, Union
 import uuid
 from typing import List, Optional
-from fastapi import APIRouter, Depends, status, Query
+from fastapi import APIRouter, Depends, status, Query, HTTPException
+from sqlalchemy import distinct, select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from backend.app.core.database import get_db
 from backend.app.core.modules.catalogo.services.catalogo_service import CatalogoService
 from backend.app.core.modules.inventario.services.inventario_service import InventarioService
-from backend.app.core.modules.catalogo.schemas import ProductoDTO
+from backend.app.core.modules.catalogo.schemas import ProductoPublicoDTO, CatalogoDescargaDTO, CatalogoProductosPaginadoDTO
 from backend.app.core.modules.inventario.schemas import DisponibilidadSucursalDTO, FiltrosOpcionesDTO
-from sqlalchemy import select
-from backend.app.core.database import AsyncSessionLocal
+from backend.app.core.modules.catalogo.models import (
+    Producto, Categoria, Talla, Color, Temporada, Coleccion, VarianteProducto
+)
+from backend.app.core.modules.identidad_empresas.models import Empresa
 
 router = APIRouter()
+
+
+@router.get(
+    "/descarga",
+    response_model=CatalogoDescargaDTO,
+    status_code=status.HTTP_200_OK,
+    summary="Descargar catálogo para consulta offline (CU03)",
+    description=(
+        "Obtiene una instantánea coherente y tipada del catálogo público para consulta offline en PWA y Flutter. "
+        "Aísla por empresa y sucursal. Incluye productos, variantes activas, precio BOB en formato decimal ('120.00'), "
+        "tallas, colores y disponibilidad pública conocida. No expone costos, márgenes ni proveedores privados. "
+        "Consultar o descargar no aparta inventario."
+    ),
+)
+async def descargarCatalogo(
+    empresa_id: Optional[uuid.UUID] = Query(None, description="Identificador único de la empresa"),
+    empresa_codigo: Optional[str] = Query(None, description="Código de la empresa (ej: fashionstore)"),
+    sucursal_id: Optional[uuid.UUID] = Query(None, description="Ámbito de sucursal opcional para disponibilidad local"),
+    db: AsyncSession = Depends(get_db),
+) -> CatalogoDescargaDTO:
+    servicio = CatalogoService(db)
+    return await servicio.descargarCatalogo(
+        empresa_id=empresa_id,
+        empresa_codigo=empresa_codigo,
+        sucursal_id=sucursal_id,
+    )
+
 
 @router.get(
     "/filtros-opciones",
     response_model=FiltrosOpcionesDTO,
     status_code=status.HTTP_200_OK,
-    summary="Opciones de filtros para catálogo (CU06)",
-    description="Retorna listas de categorías, tallas, colores, temporadas, colecciones, géneros y marcas para construir filtros en tiempo real. Solo lectura."
+    summary="Opciones de filtros para catálogo (CU06 / CU16)",
+    description="Retorna listas de categorías, tallas, colores, temporadas, colecciones, géneros y marcas para construir filtros en tiempo real, aislados por empresa."
 )
-async def filtrosOpciones(db: AsyncSession = Depends(get_db)) -> FiltrosOpcionesDTO:
-    from backend.app.core.modules.catalogo.repositories.maestro_repository import MaestroRepository
-    from backend.app.core.modules.catalogo.repositories.producto_repository import ProductoRepository
-    from sqlalchemy import distinct, select
-    from backend.app.core.modules.catalogo.models import Producto
+async def filtrosOpciones(
+    empresa_id: Optional[uuid.UUID] = Query(None, description="Filtrar opciones por empresa"),
+    empresa_codigo: Optional[str] = Query(None, description="Filtrar opciones por código de empresa"),
+    db: AsyncSession = Depends(get_db)
+) -> FiltrosOpcionesDTO:
+    from backend.app.core.modules.catalogo.services.catalogo_service import resolver_empresa_lectura_defecto
+    servicio = CatalogoService(db)
+    if not empresa_id and not empresa_codigo:
+        emp_def = await resolver_empresa_lectura_defecto(db)
+        if emp_def:
+            empresa_id = emp_def.id
+        else:
+            raise HTTPException(status_code=400, detail="Se requiere empresa_id o empresa_codigo")
+    return await servicio.obtenerOpcionesFiltros(
+        empresa_id=empresa_id,
+        empresa_codigo=empresa_codigo,
+    )
 
-    maestro_repo = MaestroRepository(db)
-    categorias = await maestro_repo.listarCategorias(solo_activas=True)
-    tallas = await maestro_repo.listarTallas(solo_activas=True)
-    colores = await maestro_repo.listarColores(solo_activos=True)
-    temporadas = await maestro_repo.listarTemporadas(solo_activas=True)
-    colecciones = await maestro_repo.listarColecciones(solo_activas=True)
-
-    q_genero = select(distinct(Producto.genero)).where(Producto.activo == True, Producto.genero.is_not(None))
-    result_g = await db.execute(q_genero)
-    generos = [row[0] for row in result_g.all() if row[0]]
-
-    q_marca = select(distinct(Producto.marca)).where(Producto.activo == True, Producto.marca.is_not(None))
-    result_m = await db.execute(q_marca)
-    marcas = [row[0] for row in result_m.all() if row[0]]
-
-    return {
-        "categorias": [{"id": str(c.id), "nombre": c.nombre} for c in categorias],
-        "tallas": [{"id": str(t.id), "nombre": t.nombre, "orden": t.orden} for t in tallas],
-        "colores": [{"id": str(c.id), "nombre": c.nombre, "codigo_hex": c.codigo_hex} for c in colores],
-        "temporadas": [{"id": str(t.id), "nombre": t.nombre} for t in temporadas],
-        "colecciones": [{"id": str(c.id), "nombre": c.nombre} for c in colecciones],
-        "generos": generos,
-        "marcas": marcas,
-    }
 
 @router.get(
     "/productos",
-    response_model=List[ProductoDTO],
+    response_model=Union[CatalogoProductosPaginadoDTO, List[ProductoPublicoDTO]],
     status_code=status.HTTP_200_OK,
-    summary="Consultar catálogo (alias CU06)",
-    description="Alias de GET /api/v1/productos para Presentación consultarCatalogo(). Delega a CatalogoService.listar()/filtrar()."
+    summary="Consultar catálogo público (CU16)",
+    description="Consulta catálogo público con filtros por texto, categoría, talla, colores simples o compuestos, precio BOB, sucursal y paginación.",
 )
 async def consultarCatalogoAlias(
     solo_activos: bool = Query(True),
@@ -64,6 +84,8 @@ async def consultarCatalogoAlias(
     categoria_id: Optional[uuid.UUID] = Query(None),
     talla_id: Optional[uuid.UUID] = Query(None),
     color_id: Optional[uuid.UUID] = Query(None),
+    componentes_color: Optional[List[uuid.UUID]] = Query(None),
+    modo_color: Literal["EXACTO", "TODOS_COMPONENTES"] = Query("EXACTO"),
     temporada_id: Optional[uuid.UUID] = Query(None),
     coleccion_id: Optional[uuid.UUID] = Query(None),
     marca: Optional[str] = Query(None),
@@ -73,36 +95,48 @@ async def consultarCatalogoAlias(
     q: Optional[str] = Query(None),
     precio_min: Optional[float] = Query(None, ge=0),
     precio_max: Optional[float] = Query(None, ge=0),
+    precio_min_bob: Optional[Decimal] = Query(None, ge=0),
+    precio_max_bob: Optional[Decimal] = Query(None, ge=0),
+    sucursal_id: Optional[uuid.UUID] = Query(None),
     codigo_hex: Optional[str] = Query(None),
+    empresa_id: Optional[uuid.UUID] = Query(None, description="Filtrar por empresa"),
+    empresa_codigo: Optional[str] = Query(None, description="Filtrar por código de empresa"),
+    paginado: bool = Query(False, description="Si es True retorna {total, limit, offset, items[]}; si es False retorna items[]"),
     db: AsyncSession = Depends(get_db)
-) -> List[ProductoDTO]:
+) -> Union[CatalogoProductosPaginadoDTO, List[ProductoPublicoDTO]]:
     servicio = CatalogoService(db)
     texto_final = texto or busqueda or q
-    tiene_filtro = any([categoria_id, talla_id, color_id, temporada_id, coleccion_id, marca, genero, texto_final, precio_min is not None, precio_max is not None, codigo_hex])
-    if tiene_filtro:
-        return await servicio.filtrar(
-            texto=texto_final,
-            categoria_id=categoria_id,
-            talla_id=talla_id,
-            color_id=color_id,
-            temporada_id=temporada_id,
-            coleccion_id=coleccion_id,
-            marca=marca,
-            genero=genero,
-            precio_min=precio_min,
-            precio_max=precio_max,
-            codigo_hex=codigo_hex,
-            solo_activos=solo_activos,
-            limit=limit,
-            offset=offset
-        )
-    return await servicio.listar(solo_activos=solo_activos, limit=limit, offset=offset)
+    return await servicio.consultarCatalogoPublico(
+        empresa_id=empresa_id,
+        empresa_codigo=empresa_codigo,
+        texto=texto_final,
+        categoria_id=categoria_id,
+        talla_id=talla_id,
+        color_id=color_id,
+        componentes_color=componentes_color,
+        modo_color=modo_color,
+        temporada_id=temporada_id,
+        coleccion_id=coleccion_id,
+        marca=marca,
+        genero=genero,
+        precio_min=precio_min,
+        precio_max=precio_max,
+        precio_min_bob=precio_min_bob,
+        precio_max_bob=precio_max_bob,
+        sucursal_id=sucursal_id,
+        codigo_hex=codigo_hex,
+        solo_activos=solo_activos,
+        limit=limit,
+        offset=offset,
+        paginado=paginado,
+    )
+
 
 @router.get(
     "/variantes/{variante_id}/disponibilidad",
     response_model=List[DisponibilidadSucursalDTO],
     status_code=status.HTTP_200_OK,
-    summary="Disponibilidad por sucursal (alias CU06)",
+    summary="Disponibilidad por sucursal (alias CU06 / CU16)",
     description="Alias de GET /api/v1/variantes/{id}/disponibilidad para consultarDisponibilidad()"
 )
 async def consultarDisponibilidadAlias(
