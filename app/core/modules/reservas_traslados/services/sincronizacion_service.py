@@ -12,11 +12,12 @@ import secrets
 import string
 import uuid
 from datetime import datetime, timedelta
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 from functools import partial
 from typing import Optional
 
 from fastapi import HTTPException, status
+from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -51,21 +52,73 @@ from backend.app.core.modules.reservas_traslados.schemas_sincronizacion import (
     ReferenciaHorariaDetalleDTO,
     ResultadoOperacionDTO,
 )
+from backend.app.core.modules.ventas_pagos.services.pedido_service import (
+    DetallePedido,
+    OfertaCompra,
+    PedidoCompra,
+    ObligacionReembolso,
+)
+from backend.app.core.modules.ventas_pagos.services.stripe_service import StripeService
+from backend.app.core.modules.ventas_pagos.models_ordenes import MetodoPreparado, OrdenPagoCrearDTO
 
 CODIGO_ALFABETO = string.ascii_uppercase + string.digits
 
 
 def calcular_hash_operacion(dto: OperacionDTO) -> str:
     """Calcula el hash SHA-256 canónico de los campos inmutables de la operación."""
+    datos = dto.datos
+    if hasattr(datos, "model_dump"):
+        raw_datos = datos.model_dump(mode="json")
+    elif isinstance(datos, dict):
+        raw_datos = dict(datos)
+    else:
+        raw_datos = getattr(datos, "__dict__", {})
+
+    raw_lineas = raw_datos.get("lineas") or []
     lineas_ordenadas = sorted(
-        [{"cantidad": l.cantidad, "variante_id": str(l.variante_id)} for l in dto.datos.lineas],
+        [
+            {
+                "cantidad": l.get("cantidad") if isinstance(l, dict) else l.cantidad,
+                "variante_id": str(l.get("variante_id") if isinstance(l, dict) else l.variante_id),
+            }
+            for l in raw_lineas
+        ],
         key=lambda x: x["variante_id"],
     )
-    datos_dict = {
-        "lineas": lineas_ordenadas,
-        "sucursal_id": str(dto.datos.sucursal_id),
-        "visita_en": dto.datos.visita_en.isoformat() if dto.datos.visita_en else None,
-    }
+
+    if dto.tipo == "SOLICITAR_COMPRA":
+        datos_dict = {
+            "lineas": lineas_ordenadas,
+            "sucursal_id": str(raw_datos.get("sucursal_id")),
+            "modalidad": str(raw_datos.get("modalidad", "RECOJO")),
+        }
+        if raw_datos.get("direccion"):
+            datos_dict["direccion"] = str(raw_datos.get("direccion"))
+        if raw_datos.get("autorizacion_cobro"):
+            ac = raw_datos.get("autorizacion_cobro")
+            if hasattr(ac, "model_dump"):
+                ac = ac.model_dump(mode="json")
+            prep_id = ac.get("preparacion_pago_id") or ac.get("metodo_preparado_id")
+            cons = ac.get("consentimiento_id") or ac.get("consentimiento")
+            tot = ac.get("total_bob") if ac.get("total_bob") is not None else ac.get("importe_bob")
+            datos_dict["autorizacion_cobro"] = {
+                "consentimiento": str(cons) if cons is not None else None,
+                "metodo_preparado_id": str(prep_id) if prep_id else None,
+                "importe_bob": str(tot) if tot is not None else None,
+            }
+    else:
+        visita = raw_datos.get("visita_en")
+        if isinstance(visita, datetime):
+            visita_str = visita.isoformat()
+        else:
+            visita_str = str(visita) if visita else None
+
+        datos_dict = {
+            "lineas": lineas_ordenadas,
+            "sucursal_id": str(raw_datos.get("sucursal_id")),
+            "visita_en": visita_str,
+        }
+
     payload = {
         "creada_local_en": dto.creada_local_en.isoformat(),
         "datos": datos_dict,
@@ -80,6 +133,7 @@ def calcular_hash_operacion(dto: OperacionDTO) -> str:
     }
     texto = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(texto.encode("utf-8")).hexdigest()
+
 
 
 class SincronizacionService:
@@ -251,7 +305,7 @@ class SincronizacionService:
     async def procesarOperacion(
         self, usuario: Usuario, dto: OperacionDTO
     ) -> ResultadoOperacionDTO:
-        if dto.tipo != "SOLICITAR_RESERVA":
+        if dto.tipo not in ("SOLICITAR_RESERVA", "SOLICITAR_COMPRA"):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Tipo de operacion {dto.tipo} no soportado en esta entrega",
@@ -272,11 +326,21 @@ class SincronizacionService:
                 detail="Usuario de la operacion no coincide con la sesion actual",
             )
 
+        digest = calcular_hash_operacion(dto)
+
+        if dto.tipo == "SOLICITAR_COMPRA":
+            return await self._procesar_solicitar_compra(usuario, dto, digest)
+
+        if isinstance(dto.datos, dict):
+            if dto.tipo == "SOLICITAR_RESERVA":
+                dto.datos = OperacionDatosReservaDTO.model_validate(dto.datos)
+            elif dto.tipo == "SOLICITAR_COMPRA":
+                dto.datos = OperacionDatosCompraDTO.model_validate(dto.datos)
+
         # Las lineas duplicadas son un error de forma (400), no un rechazo
         # comercial: nunca deben llegar a apartar stock ni violar el UNIQUE.
         validar_lineas_reserva(dto.datos.lineas)
 
-        digest = calcular_hash_operacion(dto)
 
         # Reintento / conflicto dentro del ambito autorizado (empresa + actor).
         existente = await self.sinc_repo.buscarOperacionPorActor(
@@ -721,6 +785,791 @@ class SincronizacionService:
         except Exception:
             await self.db.rollback()
             raise
+
+    async def _procesar_solicitar_compra(
+        self, usuario: Usuario, dto: OperacionDTO, digest: str
+    ) -> ResultadoOperacionDTO:
+        # Reintento / deduplicación
+        existente = await self.sinc_repo.buscarOperacionPorActor(
+            dto.operacion_id, usuario.id, usuario.empresa_id
+        )
+        if existente is not None:
+            return self._resultado_de_operacion(existente, digest)
+
+        ahora = self.reloj.ahora()
+
+        # 0. Capacidad y suscripción del plan
+        plan_service = PlanService(self.db)
+        capacidad = await plan_service.validar_capacidad(
+            usuario.empresa_id, ahora, es_offline=True
+        )
+        if not capacidad.habilitado:
+            return await self._persistir_con_reintento(
+                dto,
+                digest,
+                partial(
+                    self._persistir_rechazo_o_conflicto,
+                    dto,
+                    digest,
+                    ahora,
+                    estado="RECHAZADA",
+                    codigo="PLAN_NO_HABILITADO",
+                    detalle=capacidad.motivo_rechazo or "El plan de la empresa no está habilitado",
+                ),
+            )
+
+        creada_local = asegurar_utc(dto.creada_local_en)
+        origen_plazo = creada_local
+        vence_en = origen_plazo + timedelta(hours=24)
+
+        # Referencia horaria
+        if dto.referencia_horaria_id is None:
+            ref = await self.sinc_repo.buscarUltimaReferenciaVerificable(
+                dto.empresa_id, dto.usuario_id, dto.dispositivo_id
+            )
+            if ref is None:
+                return await self._persistir_con_reintento(
+                    dto,
+                    digest,
+                    partial(
+                        self._persistir_rechazo_o_conflicto,
+                        dto,
+                        digest,
+                        ahora,
+                        estado="CONFLICTO",
+                        codigo="TIEMPO_INCOHERENTE",
+                        detalle="Operacion offline no incluye referencia_horaria_id y no se encontro referencia previa verificable",
+                    ),
+                )
+        else:
+            ref = await self.sinc_repo.buscarReferencia(
+                dto.referencia_horaria_id,
+                empresa_id=dto.empresa_id,
+                usuario_id=dto.usuario_id,
+                dispositivo_id=dto.dispositivo_id,
+            )
+            if ref is None:
+                return await self._persistir_con_reintento(
+                    dto,
+                    digest,
+                    partial(
+                        self._persistir_rechazo_o_conflicto,
+                        dto,
+                        digest,
+                        ahora,
+                        estado="CONFLICTO",
+                        codigo="TIEMPO_INCOHERENTE",
+                        detalle="Referencia horaria inexistente o no valida para el actor y dispositivo",
+                    ),
+                )
+
+        ref_emitida = asegurar_utc(ref.emitida_en)
+        ref_vence = asegurar_utc(ref.vence_en)
+        desfase_s = ref.desfase_segundos if ref.desfase_segundos is not None else 0
+        desfase = timedelta(seconds=desfase_s)
+        creacion_estimada_central = creada_local + desfase
+        tolerancia_s = ref.tolerancia_segundos if ref.tolerancia_segundos is not None else 300
+        tolerancia = timedelta(seconds=tolerancia_s)
+
+        if ref.hora_local_en is not None:
+            if creacion_estimada_central < ref_emitida or creacion_estimada_central >= ref_vence:
+                return await self._persistir_con_reintento(
+                    dto,
+                    digest,
+                    partial(
+                        self._persistir_rechazo_o_conflicto,
+                        dto,
+                        digest,
+                        ahora,
+                        estado="CONFLICTO",
+                        codigo="TIEMPO_INCOHERENTE",
+                        detalle="Fecha de creacion estimada fuera de la ventana de vigencia de la referencia horaria",
+                    ),
+                )
+        else:
+            if creacion_estimada_central < ref_emitida - tolerancia or creacion_estimada_central > ref_vence + tolerancia:
+                return await self._persistir_con_reintento(
+                    dto,
+                    digest,
+                    partial(
+                        self._persistir_rechazo_o_conflicto,
+                        dto,
+                        digest,
+                        ahora,
+                        estado="CONFLICTO",
+                        codigo="TIEMPO_INCOHERENTE",
+                        detalle="Fecha de creacion local fuera de la ventana de 8 horas de la referencia",
+                    ),
+                )
+
+        if creacion_estimada_central > ahora + tolerancia:
+            return await self._persistir_con_reintento(
+                dto,
+                digest,
+                partial(
+                    self._persistir_rechazo_o_conflicto,
+                    dto,
+                    digest,
+                    ahora,
+                    estado="CONFLICTO",
+                    codigo="TIEMPO_INCOHERENTE",
+                    detalle="Fecha de creacion estimada en el futuro respecto a la recepcion central",
+                ),
+            )
+
+        if ahora >= origen_plazo + timedelta(hours=24):
+            return await self._persistir_con_reintento(
+                dto,
+                digest,
+                partial(
+                    self._persistir_rechazo_o_conflicto,
+                    dto,
+                    digest,
+                    ahora,
+                    estado="RECHAZADA",
+                    codigo="SOLICITUD_VENCIDA",
+                    detalle="Han transcurrido mas de 24 horas desde la creacion local original",
+                ),
+            )
+
+        # Parsear datos de compra
+        datos = dto.datos
+        if hasattr(datos, "model_dump"):
+            datos_dict = datos.model_dump(mode="json")
+        elif isinstance(datos, dict):
+            datos_dict = dict(datos)
+        else:
+            datos_dict = getattr(datos, "__dict__", {})
+
+        sucursal_id_raw = datos_dict.get("sucursal_id")
+        try:
+            sucursal_id = uuid.UUID(str(sucursal_id_raw))
+        except (ValueError, TypeError):
+            sucursal_id = None
+
+        if sucursal_id is None:
+            return await self._persistir_con_reintento(
+                dto,
+                digest,
+                partial(
+                    self._persistir_rechazo_o_conflicto,
+                    dto,
+                    digest,
+                    ahora,
+                    estado="RECHAZADA",
+                    codigo="SIN_STOCK",
+                    detalle="Sucursal no válida en la solicitud",
+                ),
+            )
+
+        sucursal = await self.sucursal_repo.buscarPorId(sucursal_id)
+        if sucursal is None or sucursal.empresa_id != usuario.empresa_id:
+            return await self._persistir_con_reintento(
+                dto,
+                digest,
+                partial(
+                    self._persistir_rechazo_o_conflicto,
+                    dto,
+                    digest,
+                    ahora,
+                    estado="RECHAZADA",
+                    codigo="SIN_STOCK",
+                    detalle="Sucursal no encontrada o inactiva en la empresa",
+                ),
+            )
+
+        raw_lineas = datos_dict.get("lineas") or []
+        if not raw_lineas:
+            return await self._persistir_con_reintento(
+                dto,
+                digest,
+                partial(
+                    self._persistir_rechazo_o_conflicto,
+                    dto,
+                    digest,
+                    ahora,
+                    estado="RECHAZADA",
+                    codigo="SIN_STOCK",
+                    detalle="La compra no contiene líneas",
+                ),
+            )
+
+        # Validar y calcular importes centrales
+        subtotal_central = Decimal("0.00")
+        lineas_procesadas = []
+        for l in raw_lineas:
+            vid = uuid.UUID(str(l.get("variante_id") if isinstance(l, dict) else l.variante_id))
+            cant = int(l.get("cantidad") if isinstance(l, dict) else l.cantidad)
+            var = await self.variante_repo.buscarPorId(vid)
+            if var is None or var.empresa_id != usuario.empresa_id:
+                return await self._persistir_con_reintento(
+                    dto,
+                    digest,
+                    partial(
+                        self._persistir_rechazo_o_conflicto,
+                        dto,
+                        digest,
+                        ahora,
+                        estado="RECHAZADA",
+                        codigo="SIN_STOCK",
+                        detalle=f"Variante {vid} no existe en la empresa",
+                    ),
+                )
+            p_unit = Decimal(str(var.precio or 0))
+            tot_linea = p_unit * cant
+            subtotal_central += tot_linea
+            lineas_procesadas.append((var, cant, p_unit, tot_linea))
+
+        modalidad = str(datos_dict.get("modalidad", "RECOJO")).upper()
+        envio_central = Decimal("15.00") if modalidad == "DELIVERY" else Decimal("0.00")
+        total_central = subtotal_central + envio_central
+
+        # Manejo según versión de esquema
+        if dto.version_esquema in (1, 2):
+            # Versiones 1 y 2: conservan semántica anterior y jamás cobran automáticamente
+            return await self._persistir_con_reintento(
+                dto,
+                digest,
+                partial(
+                    self._crear_compra_v1_v2_en_tx,
+                    dto=dto,
+                    digest=digest,
+                    ahora=ahora,
+                    usuario=usuario,
+                    sucursal_id=sucursal_id,
+                    modalidad=modalidad,
+                    direccion=datos_dict.get("direccion"),
+                    subtotal=subtotal_central,
+                    envio=envio_central,
+                    total=total_central,
+                    lineas=lineas_procesadas,
+                ),
+            )
+
+        # Versión 3: requiere autorización de cobro completa y comprobación contra oferta central
+        aut = datos_dict.get("autorizacion_cobro")
+        if not aut:
+            return await self._persistir_con_reintento(
+                dto,
+                digest,
+                partial(
+                    self._persistir_rechazo_o_conflicto,
+                    dto,
+                    digest,
+                    ahora,
+                    estado="PENDIENTE_INTERVENCION",
+                    codigo="AUTORIZACION_REQUERIDA",
+                    detalle="Solicitud guardada; requiere autorización y método preparado para cobro automático",
+                ),
+            )
+
+        if hasattr(aut, "model_dump"):
+            aut = aut.model_dump(mode="json")
+
+        consentimiento = aut.get("consentimiento_id") or aut.get("consentimiento")
+        if consentimiento is None or (isinstance(consentimiento, bool) and not consentimiento):
+            return await self._persistir_con_reintento(
+                dto,
+                digest,
+                partial(
+                    self._persistir_rechazo_o_conflicto,
+                    dto,
+                    digest,
+                    ahora,
+                    estado="PENDIENTE_INTERVENCION",
+                    codigo="AUTORIZACION_REQUERIDA",
+                    detalle="Solicitud guardada; requiere autorización y método preparado para cobro automático",
+                ),
+            )
+
+        metodo_preparado_id_raw = aut.get("preparacion_pago_id") or aut.get("metodo_preparado_id")
+        if not metodo_preparado_id_raw:
+            return await self._persistir_con_reintento(
+                dto,
+                digest,
+                partial(
+                    self._persistir_rechazo_o_conflicto,
+                    dto,
+                    digest,
+                    ahora,
+                    estado="PENDIENTE_INTERVENCION",
+                    codigo="AUTORIZACION_REQUERIDA",
+                    detalle="Solicitud guardada; requiere autorización y método preparado para cobro automático",
+                ),
+            )
+
+        try:
+            metodo_preparado_id = uuid.UUID(str(metodo_preparado_id_raw))
+        except (ValueError, TypeError):
+            return await self._persistir_con_reintento(
+                dto,
+                digest,
+                partial(
+                    self._persistir_rechazo_o_conflicto,
+                    dto,
+                    digest,
+                    ahora,
+                    estado="PENDIENTE_INTERVENCION",
+                    codigo="AUTORIZACION_REQUERIDA",
+                    detalle="UUID de método preparado inválido",
+                ),
+            )
+
+        if aut.get("permite_cobro_al_reconectar") is False:
+            return await self._persistir_con_reintento(
+                dto,
+                digest,
+                partial(
+                    self._persistir_rechazo_o_conflicto,
+                    dto,
+                    digest,
+                    ahora,
+                    estado="PENDIENTE_INTERVENCION",
+                    codigo="AUTORIZACION_REQUERIDA",
+                    detalle="Solicitud no autoriza cobro automático al reconectar",
+                ),
+            )
+
+        # Consultar tasa vigente central y calcular oferta central
+        stmt_tasa = text("SELECT id, tasa_bob_por_usd FROM plataforma.tasas_cambio ORDER BY vigente_desde DESC LIMIT 1")
+        r_tasa = await self.db.execute(stmt_tasa)
+        f_tasa = r_tasa.first()
+        tasa_central_val = Decimal(str(f_tasa[1])) if f_tasa else Decimal("6.96")
+        total_usd_central = (total_central / tasa_central_val).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+        # Validar oferta autorizada contra la oferta central
+        importe_bob_cliente = aut.get("total_bob") if aut.get("total_bob") is not None else aut.get("importe_bob")
+        if importe_bob_cliente is not None:
+            if Decimal(str(importe_bob_cliente)) != total_central:
+                return await self._persistir_con_reintento(
+                    dto,
+                    digest,
+                    partial(
+                        self._persistir_rechazo_o_conflicto,
+                        dto,
+                        digest,
+                        ahora,
+                        estado="REQUIERE_NUEVA_ACEPTACION",
+                        codigo="PRECIO_CAMBIADO",
+                        detalle=f"El importe central ({total_central} BOB) difiere del autorizado ({importe_bob_cliente} BOB)",
+                    ),
+                )
+
+        moneda_cobro = aut.get("moneda_cobro")
+        if moneda_cobro and moneda_cobro != "USD":
+            return await self._persistir_con_reintento(
+                dto,
+                digest,
+                partial(
+                    self._persistir_rechazo_o_conflicto,
+                    dto,
+                    digest,
+                    ahora,
+                    estado="REQUIERE_NUEVA_ACEPTACION",
+                    codigo="PRECIO_CAMBIADO",
+                    detalle="Moneda de cobro inválida (solo se admite USD)",
+                ),
+            )
+
+        tasa_cliente = aut.get("tasa_bob_por_usd") if aut.get("tasa_bob_por_usd") is not None else aut.get("tasa")
+        if tasa_cliente is not None:
+            if Decimal(str(tasa_cliente)) != tasa_central_val:
+                return await self._persistir_con_reintento(
+                    dto,
+                    digest,
+                    partial(
+                        self._persistir_rechazo_o_conflicto,
+                        dto,
+                        digest,
+                        ahora,
+                        estado="REQUIERE_NUEVA_ACEPTACION",
+                        codigo="PRECIO_CAMBIADO",
+                        detalle=f"La tasa autorizada ({tasa_cliente}) difiere de la tasa vigente ({tasa_central_val})",
+                    ),
+                )
+
+        usd_cliente = aut.get("importe_cobro") if aut.get("importe_cobro") is not None else aut.get("importe_usd")
+        if usd_cliente is not None:
+            if Decimal(str(usd_cliente)) != total_usd_central:
+                return await self._persistir_con_reintento(
+                    dto,
+                    digest,
+                    partial(
+                        self._persistir_rechazo_o_conflicto,
+                        dto,
+                        digest,
+                        ahora,
+                        estado="REQUIERE_NUEVA_ACEPTACION",
+                        codigo="PRECIO_CAMBIADO",
+                        detalle=f"El importe USD autorizado ({usd_cliente}) difiere del central ({total_usd_central})",
+                    ),
+                )
+
+        vig_cliente = aut.get("vigente_hasta") or aut.get("vigencia_hasta")
+        if vig_cliente:
+            if isinstance(vig_cliente, str):
+                vig_dt = datetime.fromisoformat(vig_cliente.replace("Z", "+00:00"))
+            else:
+                vig_dt = vig_cliente
+            if asegurar_utc(vig_dt) <= ahora:
+                return await self._persistir_con_reintento(
+                    dto,
+                    digest,
+                    partial(
+                        self._persistir_rechazo_o_conflicto,
+                        dto,
+                        digest,
+                        ahora,
+                        estado="REQUIERE_NUEVA_ACEPTACION",
+                        codigo="PRECIO_CAMBIADO",
+                        detalle="La autorización de cobro ha expirado",
+                    ),
+                )
+
+        # Validar método preparado en base de datos
+        stmt_mp = select(MetodoPreparado).where(
+            MetodoPreparado.id == metodo_preparado_id,
+            MetodoPreparado.empresa_id == usuario.empresa_id,
+            MetodoPreparado.cliente_id == usuario.id,
+        )
+        mp = (await self.db.execute(stmt_mp)).scalars().first()
+        if mp is None or mp.estado != "LISTO":
+            return await self._persistir_con_reintento(
+                dto,
+                digest,
+                partial(
+                    self._persistir_rechazo_o_conflicto,
+                    dto,
+                    digest,
+                    ahora,
+                    estado="PENDIENTE_INTERVENCION",
+                    codigo="AUTORIZACION_REQUERIDA",
+                    detalle="Método preparado no encontrado, no listo o no pertenece al cliente",
+                ),
+            )
+
+        # Autorización completa y válida: crear pedido pendiente e integrar cobro real con Stripe
+        return await self._persistir_con_reintento(
+            dto,
+            digest,
+            partial(
+                self._crear_compra_v3_y_cobrar_en_tx,
+                dto=dto,
+                digest=digest,
+                ahora=ahora,
+                usuario=usuario,
+                sucursal_id=sucursal_id,
+                modalidad=modalidad,
+                direccion=datos_dict.get("direccion"),
+                subtotal=subtotal_central,
+                envio=envio_central,
+                total=total_central,
+                metodo_preparado_id=metodo_preparado_id,
+                lineas=lineas_procesadas,
+            ),
+        )
+
+    async def _crear_compra_v1_v2_en_tx(
+        self,
+        dto: OperacionDTO,
+        digest: str,
+        ahora: datetime,
+        usuario: Usuario,
+        sucursal_id: uuid.UUID,
+        modalidad: str,
+        direccion: Optional[str],
+        subtotal: Decimal,
+        envio: Decimal,
+        total: Decimal,
+        lineas: List[Tuple[Any, int, Decimal, Decimal]],
+    ) -> ResultadoOperacionDTO:
+        pedido_id = uuid.uuid4()
+        pedido = PedidoCompra(
+            id=pedido_id,
+            empresa_id=usuario.empresa_id,
+            cliente_id=usuario.id,
+            sucursal_id=sucursal_id,
+            operacion_id=dto.operacion_id,
+            metodo_preparado_id=None,
+            modalidad=modalidad,
+            direccion=direccion if modalidad == "DELIVERY" else None,
+            subtotal_bob=subtotal,
+            descuento_bob=Decimal("0.00"),
+            envio_bob=envio,
+            total_bob=total,
+            estado="BORRADOR",
+            estado_pago="SIN_PAGO",
+            estado_cumplimiento="SIN_ASIGNACION",
+            revision=1,
+            creado_en=ahora,
+            actualizado_en=ahora,
+        )
+        self.db.add(pedido)
+
+        doc_lineas = []
+        for var, cant, precio, tot in lineas:
+            det = DetallePedido(
+                id=uuid.uuid4(),
+                empresa_id=usuario.empresa_id,
+                pedido_id=pedido_id,
+                variante_id=var.id,
+                cantidad=cant,
+                precio_unitario_bob=precio,
+                descuento_bob=Decimal("0.00"),
+                total_bob=tot,
+                oferta_revision=1,
+            )
+            self.db.add(det)
+            doc_lineas.append(
+                {
+                    "variante_id": str(var.id),
+                    "cantidad": cant,
+                    "precio_unitario_bob": str(precio),
+                    "total_bob": str(tot),
+                }
+            )
+
+        doc_oferta = {
+            "pedido_id": str(pedido_id),
+            "revision": 1,
+            "lineas": doc_lineas,
+            "subtotal_bob": str(subtotal),
+            "descuento_bob": "0.00",
+            "envio_bob": str(envio),
+            "total_bob": str(total),
+        }
+        oferta = OfertaCompra(
+            id=uuid.uuid4(),
+            empresa_id=usuario.empresa_id,
+            pedido_id=pedido_id,
+            revision=1,
+            documento=doc_oferta,
+            documento_hash=hashlib.sha256(json.dumps(doc_oferta, sort_keys=True).encode("utf-8")).hexdigest(),
+            subtotal_bob=subtotal,
+            descuento_bob=Decimal("0.00"),
+            envio_bob=envio,
+            total_bob=total,
+            vigente_hasta=ahora + timedelta(hours=24),
+            creada_en=ahora,
+        )
+        self.db.add(oferta)
+
+        resultado = ResultadoOperacionDTO(
+            operacion_id=dto.operacion_id,
+            estado="PENDIENTE_PAGO",
+            codigo="OK",
+            recibida_en=ahora,
+            aceptada_en=ahora,
+            recurso_id=pedido.id,
+            vence_en=ahora + timedelta(hours=24),
+            detalle="Compra offline registrada en central; pendiente de pago por el cliente",
+            revision=1,
+        )
+
+        op_rec = OperacionSincronizacion(
+            id=uuid.uuid4(),
+            empresa_id=dto.empresa_id,
+            usuario_id=dto.usuario_id,
+            operacion_id=dto.operacion_id,
+            tipo=dto.tipo,
+            version_esquema=dto.version_esquema,
+            dispositivo_id=dto.dispositivo_id,
+            secuencia_local=dto.secuencia_local,
+            creada_local_en=asegurar_utc(dto.creada_local_en),
+            recibida_en=ahora,
+            aceptada_en=resultado.aceptada_en,
+            referencia_horaria_id=dto.referencia_horaria_id,
+            hash_solicitud=digest,
+            solicitud=dto.model_dump(mode="json"),
+            estado=resultado.estado,
+            codigo=resultado.codigo,
+            detalle=resultado.detalle,
+            resultado=resultado.model_dump(mode="json"),
+            recurso_id=pedido.id,
+            revision=1,
+        )
+        self.db.add(op_rec)
+        await self.db.commit()
+        return resultado
+
+    async def _crear_compra_v3_y_cobrar_en_tx(
+        self,
+        dto: OperacionDTO,
+        digest: str,
+        ahora: datetime,
+        usuario: Usuario,
+        sucursal_id: uuid.UUID,
+        modalidad: str,
+        direccion: Optional[str],
+        subtotal: Decimal,
+        envio: Decimal,
+        total: Decimal,
+        metodo_preparado_id: uuid.UUID,
+        lineas: List[Tuple[Any, int, Decimal, Decimal]],
+    ) -> ResultadoOperacionDTO:
+        # 1. Crear pedido en estado pendiente de verificación, SIN compromiso de stock ni reembolso
+        pedido_id = uuid.uuid4()
+        pedido = PedidoCompra(
+            id=pedido_id,
+            empresa_id=usuario.empresa_id,
+            cliente_id=usuario.id,
+            sucursal_id=sucursal_id,
+            operacion_id=dto.operacion_id,
+            metodo_preparado_id=metodo_preparado_id,
+            modalidad=modalidad,
+            direccion=direccion if modalidad == "DELIVERY" else None,
+            subtotal_bob=subtotal,
+            descuento_bob=Decimal("0.00"),
+            envio_bob=envio,
+            total_bob=total,
+            estado="BORRADOR",
+            estado_pago="EN_VERIFICACION",
+            estado_cumplimiento="SIN_ASIGNACION",
+            revision=1,
+            creado_en=ahora,
+            actualizado_en=ahora,
+        )
+        self.db.add(pedido)
+
+        doc_lineas = []
+        for var, cant, precio, tot in lineas:
+            det = DetallePedido(
+                id=uuid.uuid4(),
+                empresa_id=usuario.empresa_id,
+                pedido_id=pedido_id,
+                variante_id=var.id,
+                cantidad=cant,
+                precio_unitario_bob=precio,
+                descuento_bob=Decimal("0.00"),
+                total_bob=tot,
+                oferta_revision=1,
+            )
+            self.db.add(det)
+            doc_lineas.append(
+                {
+                    "variante_id": str(var.id),
+                    "cantidad": cant,
+                    "precio_unitario_bob": str(precio),
+                    "total_bob": str(tot),
+                }
+            )
+
+        doc_oferta = {
+            "pedido_id": str(pedido_id),
+            "revision": 1,
+            "lineas": doc_lineas,
+            "subtotal_bob": str(subtotal),
+            "descuento_bob": "0.00",
+            "envio_bob": str(envio),
+            "total_bob": str(total),
+        }
+        oferta = OfertaCompra(
+            id=uuid.uuid4(),
+            empresa_id=usuario.empresa_id,
+            pedido_id=pedido_id,
+            revision=1,
+            documento=doc_oferta,
+            documento_hash=hashlib.sha256(json.dumps(doc_oferta, sort_keys=True).encode("utf-8")).hexdigest(),
+            subtotal_bob=subtotal,
+            descuento_bob=Decimal("0.00"),
+            envio_bob=envio,
+            total_bob=total,
+            vigente_hasta=ahora + timedelta(hours=24),
+            creada_en=ahora,
+        )
+        self.db.add(oferta)
+        await self.db.flush()
+
+        # 2. Integrar cobro real mediante StripeService
+        stripe_svc = StripeService(self.db, reloj=self.reloj)
+        orden_dto = await stripe_svc.crear_orden_pago(
+            usuario=usuario,
+            datos=OrdenPagoCrearDTO(
+                contexto="PEDIDO",
+                recurso_id=pedido.id,
+                metodo_preparado_id=metodo_preparado_id,
+                consentimiento_cobro_posterior=True,
+            ),
+            clave_idempotencia=dto.operacion_id,
+            autocommit=False,
+        )
+
+        # 3. Determinar resultado según estado devuelto por Stripe / pasarela
+        if orden_dto.estado == "REQUIERE_ACCION_CLIENTE":
+            resultado = ResultadoOperacionDTO(
+                operacion_id=dto.operacion_id,
+                estado="REQUIERE_ACCION_CLIENTE",
+                codigo="ACCION_CLIENTE_REQUERIDA",
+                recibida_en=ahora,
+                recurso_id=pedido.id,
+                vence_en=ahora + timedelta(hours=24),
+                detalle="El proveedor de pago exige verificación 3D Secure del cliente",
+                revision=1,
+            )
+        elif orden_dto.estado == "CAPTURADO":
+            await self.db.refresh(pedido)
+            if pedido.estado_cumplimiento == "COMPROMETIDO":
+                resultado = ResultadoOperacionDTO(
+                    operacion_id=dto.operacion_id,
+                    estado="ACEPTADA",
+                    codigo="OK",
+                    recibida_en=ahora,
+                    aceptada_en=ahora,
+                    recurso_id=pedido.id,
+                    vence_en=ahora + timedelta(hours=24),
+                    detalle="Compra offline sincronizada y stock asignado exitosamente",
+                    revision=1,
+                )
+            else:
+                resultado = ResultadoOperacionDTO(
+                    operacion_id=dto.operacion_id,
+                    estado="ACEPTADA",
+                    codigo="SIN_STOCK",
+                    recibida_en=ahora,
+                    aceptada_en=ahora,
+                    recurso_id=pedido.id,
+                    vence_en=ahora + timedelta(hours=24),
+                    detalle="Pedido cobrado pero sin stock disponible; derivado a reembolso íntegro CU27",
+                    revision=1,
+                )
+        else:
+            resultado = ResultadoOperacionDTO(
+                operacion_id=dto.operacion_id,
+                estado="PENDIENTE_PAGO",
+                codigo="PAGO_EN_VERIFICACION",
+                recibida_en=ahora,
+                recurso_id=pedido.id,
+                vence_en=ahora + timedelta(hours=24),
+                detalle="Pago en verificación con el proveedor",
+                revision=1,
+            )
+
+        op_rec = OperacionSincronizacion(
+            id=uuid.uuid4(),
+            empresa_id=dto.empresa_id,
+            usuario_id=dto.usuario_id,
+            operacion_id=dto.operacion_id,
+            tipo=dto.tipo,
+            version_esquema=dto.version_esquema,
+            dispositivo_id=dto.dispositivo_id,
+            secuencia_local=dto.secuencia_local,
+            creada_local_en=asegurar_utc(dto.creada_local_en),
+            recibida_en=ahora,
+            aceptada_en=resultado.aceptada_en,
+            referencia_horaria_id=dto.referencia_horaria_id,
+            hash_solicitud=digest,
+            solicitud=dto.model_dump(mode="json"),
+            estado=resultado.estado,
+            codigo=resultado.codigo,
+            detalle=resultado.detalle,
+            resultado=resultado.model_dump(mode="json"),
+            recurso_id=pedido.id,
+            revision=1,
+        )
+        self.db.add(op_rec)
+        await self.db.commit()
+        return resultado
+
 
     async def consultarOperacion(
         self, usuario: Usuario, operacion_id: uuid.UUID

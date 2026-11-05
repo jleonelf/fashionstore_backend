@@ -1,10 +1,10 @@
-"""Puerta Stripe Test Mode — Ciclo 3 (CU15).
+"""Puerta Stripe Test Mode — Ciclo 3 y E2 (CU15, CU22, CU27).
 
 Sin claves la app inicia y este módulo responde 503 tipado; ninguna prueba
 automática llama a Stripe real (usan FakeStripeGateway vía monkeypatch).
-Con claves, el adaptador real usa httpx contra api.stripe.com (PaymentIntents)
+Con claves, el adaptador real usa httpx contra api.stripe.com (PaymentIntents, SetupIntents, Refunds)
 y verifica el webhook con HMAC-SHA256 del cuerpo crudo (sin SDK obligatorio).
-Nunca se almacena tarjeta/CVC: solo IDs (pi_*) y estados.
+Nunca se almacena tarjeta/CVC: solo IDs (pi_*, seti_*, re_*) y estados.
 """
 import hashlib
 import hmac
@@ -32,8 +32,24 @@ class IntencionPago:
     venta_id: str
     monto_centavos: int
     moneda: str
-    estado: str  # REQUIRES_PAYMENT | SUCCEEDED | FAILED | CANCELED
+    estado: str  # REQUIRES_PAYMENT | SUCCEEDED | FAILED | CANCELED | REQUIRES_ACTION
     client_secret: Optional[str] = None
+
+
+@dataclass
+class SetupIntentInfo:
+    id: str
+    cliente_id: str
+    estado: str  # requires_payment_method | succeeded
+    client_secret: Optional[str] = None
+
+
+@dataclass
+class ReembolsoInfo:
+    id: str
+    payment_intent_id: str
+    centavos_usd: int
+    estado: str  # succeeded | pending | failed
 
 
 class StripeGateway:
@@ -48,6 +64,26 @@ class StripeGateway:
     async def consultar_intencion(self, payment_intent_id: str) -> IntencionPago:
         raise NotImplementedError
 
+    async def crear_setup_intent(
+        self, cliente_id: str, idempotency_key: Optional[str] = None,
+    ) -> SetupIntentInfo:
+        raise NotImplementedError
+
+    async def crear_pago_conectado(
+        self, recurso_id: str, monto_centavos: int, moneda: str,
+        idempotency_key: str, metodo_preparado_id: Optional[str] = None,
+        off_session: bool = False, simular_requiere_accion: bool = False,
+    ) -> IntencionPago:
+        raise NotImplementedError
+
+    async def confirmar_intencion(self, payment_intent_id: str) -> IntencionPago:
+        raise NotImplementedError
+
+    async def crear_reembolso(
+        self, payment_intent_id: str, centavos_usd: int, idempotency_key: Optional[str] = None,
+    ) -> ReembolsoInfo:
+        raise NotImplementedError
+
 
 class FakeStripeGateway(StripeGateway):
     """Doble de pruebas: sin red, determinista, conmutado por tests."""
@@ -55,12 +91,13 @@ class FakeStripeGateway(StripeGateway):
     def __init__(self):
         self.intenciones: dict[str, IntencionPago] = {}
         self.por_venta: dict[str, str] = {}
+        self.setup_intents: dict[str, SetupIntentInfo] = {}
+        self.reembolsos: dict[str, ReembolsoInfo] = {}
+        self.simular_requiere_accion: bool = False
 
     async def crear_o_reutilizar_intencion(
         self, venta_id, monto_centavos, moneda, idempotency_key, referencia_existente=None,
     ) -> IntencionPago:
-        import secrets as _secrets
-
         # FAILED reutiliza el PI vigente; CANCELED exige uno nuevo porque un
         # PI cancelado ya no puede procesar un pago (contrato Stripe).
         if referencia_existente and referencia_existente in self.intenciones:
@@ -72,8 +109,7 @@ class FakeStripeGateway(StripeGateway):
             vigente = self.intenciones.get(pi_id)
             if vigente is not None and vigente.estado != "CANCELED":
                 return vigente
-        # IDs globalmente únicos (como Stripe real): sin choques entre corridas.
-        pi_id = f"pi_test_{_secrets.token_hex(4)}"
+        pi_id = f"pi_test_{secrets.token_hex(4)}"
         inten = IntencionPago(
             id=pi_id, venta_id=venta_id, monto_centavos=monto_centavos,
             moneda=moneda, estado="REQUIRES_PAYMENT",
@@ -88,9 +124,69 @@ class FakeStripeGateway(StripeGateway):
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Intención no encontrada")
         return self.intenciones[payment_intent_id]
 
+    async def crear_setup_intent(
+        self, cliente_id: str, idempotency_key: Optional[str] = None,
+    ) -> SetupIntentInfo:
+        seti_id = f"seti_test_{secrets.token_hex(4)}"
+        info = SetupIntentInfo(
+            id=seti_id,
+            cliente_id=cliente_id,
+            estado="succeeded",
+            client_secret=f"{seti_id}_secret_test",
+        )
+        self.setup_intents[seti_id] = info
+        return info
+
+    async def crear_pago_conectado(
+        self, recurso_id: str, monto_centavos: int, moneda: str,
+        idempotency_key: str, metodo_preparado_id: Optional[str] = None,
+        off_session: bool = False, simular_requiere_accion: bool = False,
+    ) -> IntencionPago:
+        pi_id = f"pi_test_{secrets.token_hex(4)}"
+        requiere = simular_requiere_accion or self.simular_requiere_accion
+        if requiere:
+            estado = "REQUIRES_ACTION"
+        elif off_session:
+            estado = "SUCCEEDED"
+        else:
+            estado = "REQUIRES_PAYMENT"
+
+        inten = IntencionPago(
+            id=pi_id,
+            venta_id=recurso_id,
+            monto_centavos=monto_centavos,
+            moneda=moneda,
+            estado=estado,
+            client_secret=f"{pi_id}_secret_test",
+        )
+        self.intenciones[pi_id] = inten
+        self.por_venta[recurso_id] = pi_id
+        return inten
+
+    async def confirmar_intencion(self, payment_intent_id: str) -> IntencionPago:
+        if payment_intent_id not in self.intenciones:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Intención no encontrada")
+        inten = self.intenciones[payment_intent_id]
+        inten.estado = "SUCCEEDED"
+        return inten
+
+    async def crear_reembolso(
+        self, payment_intent_id: str, centavos_usd: int, idempotency_key: Optional[str] = None,
+    ) -> ReembolsoInfo:
+        re_id = f"re_test_{secrets.token_hex(4)}"
+        reemb = ReembolsoInfo(
+            id=re_id,
+            payment_intent_id=payment_intent_id,
+            centavos_usd=centavos_usd,
+            estado="succeeded",
+        )
+        self.reembolsos[re_id] = reemb
+        return reemb
+
     # Helpers de prueba: transiciones controladas sin red.
     def marcar(self, pi_id: str, estado: str) -> None:
-        self.intenciones[pi_id].estado = estado
+        if pi_id in self.intenciones:
+            self.intenciones[pi_id].estado = estado
 
 
 def verificar_firma_stripe(cuerpo_crudo: bytes, encabezado_firma: Optional[str], secreto: str) -> dict:
@@ -241,11 +337,118 @@ class _StripeReal(StripeGateway):
                 detail={"codigo": "STRIPE_CONSULTA_FALLIDA", "mensaje": "No se pudo consultar la intención"},
             )
         data: Any = r.json()
-        mapa = {"requires_payment_method": "REQUIRES_PAYMENT", "succeeded": "SUCCEEDED",
-                "canceled": "CANCELED"}
+        mapa = {
+            "requires_payment_method": "REQUIRES_PAYMENT",
+            "requires_action": "REQUIRES_ACTION",
+            "succeeded": "SUCCEEDED",
+            "canceled": "CANCELED",
+        }
         estado = mapa.get(str(data.get("status", "")), "REQUIRES_PAYMENT")
         return IntencionPago(
             id=data["id"], venta_id=str(data.get("metadata", {}).get("venta_id", "")),
             monto_centavos=int(data.get("amount", 0)), moneda=str(data.get("currency", "usd")),
             estado=estado, client_secret=data.get("client_secret"),
+        )
+
+    async def crear_setup_intent(
+        self, cliente_id: str, idempotency_key: Optional[str] = None,
+    ) -> SetupIntentInfo:
+        import httpx
+
+        async with httpx.AsyncClient(timeout=15.0) as cli:
+            r = await cli.post(
+                "https://api.stripe.com/v1/setup_intents",
+                auth=(settings.STRIPE_SECRET_KEY, ""),
+                headers={"Idempotency-Key": idempotency_key or secrets.token_hex(16)},
+                data={"usage": "off_session", "metadata[cliente_id]": cliente_id},
+            )
+        if r.status_code >= 400:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail={"codigo": "STRIPE_RECHAZO", "mensaje": "La pasarela rechazó el setup intent"},
+            )
+        data = r.json()
+        return SetupIntentInfo(
+            id=data["id"],
+            cliente_id=cliente_id,
+            estado=data.get("status", "requires_payment_method"),
+            client_secret=data.get("client_secret"),
+        )
+
+    async def crear_pago_conectado(
+        self, recurso_id: str, monto_centavos: int, moneda: str,
+        idempotency_key: str, metodo_preparado_id: Optional[str] = None,
+        off_session: bool = False, simular_requiere_accion: bool = False,
+    ) -> IntencionPago:
+        import httpx
+
+        post_data = {
+            "amount": str(monto_centavos),
+            "currency": moneda,
+            "metadata[recurso_id]": recurso_id,
+        }
+        if off_session:
+            post_data["off_session"] = "true"
+            post_data["confirm"] = "true"
+        async with httpx.AsyncClient(timeout=15.0) as cli:
+            r = await cli.post(
+                "https://api.stripe.com/v1/payment_intents",
+                auth=(settings.STRIPE_SECRET_KEY, ""),
+                headers={"Idempotency-Key": idempotency_key or secrets.token_hex(16)},
+                data=post_data,
+            )
+        if r.status_code >= 400:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail={"codigo": "STRIPE_RECHAZO", "mensaje": "La pasarela rechazó el pago conectado"},
+            )
+        data = r.json()
+        st = data.get("status", "")
+        estado = "SUCCEEDED" if st == "succeeded" else ("REQUIRES_ACTION" if st == "requires_action" else "REQUIRES_PAYMENT")
+        return IntencionPago(
+            id=data["id"], venta_id=recurso_id, monto_centavos=int(data["amount"]),
+            moneda=data.get("currency", moneda), estado=estado, client_secret=data.get("client_secret"),
+        )
+
+    async def confirmar_intencion(self, payment_intent_id: str) -> IntencionPago:
+        import httpx
+
+        async with httpx.AsyncClient(timeout=15.0) as cli:
+            r = await cli.post(
+                f"https://api.stripe.com/v1/payment_intents/{payment_intent_id}/confirm",
+                auth=(settings.STRIPE_SECRET_KEY, ""),
+            )
+        if r.status_code >= 400:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail={"codigo": "STRIPE_CONFIRMACION_FALLIDA", "mensaje": "No se pudo confirmar la intención"},
+            )
+        data = r.json()
+        return IntencionPago(
+            id=data["id"], venta_id=str(data.get("metadata", {}).get("recurso_id", "")),
+            monto_centavos=int(data.get("amount", 0)), moneda=str(data.get("currency", "usd")),
+            estado="SUCCEEDED", client_secret=data.get("client_secret"),
+        )
+
+    async def crear_reembolso(
+        self, payment_intent_id: str, centavos_usd: int, idempotency_key: Optional[str] = None,
+    ) -> ReembolsoInfo:
+        import httpx
+
+        async with httpx.AsyncClient(timeout=15.0) as cli:
+            r = await cli.post(
+                "https://api.stripe.com/v1/refunds",
+                auth=(settings.STRIPE_SECRET_KEY, ""),
+                headers={"Idempotency-Key": idempotency_key or secrets.token_hex(16)},
+                data={"payment_intent": payment_intent_id, "amount": str(centavos_usd)},
+            )
+        if r.status_code >= 400:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail={"codigo": "STRIPE_REEMBOLSO_FALLIDO", "mensaje": "No se pudo procesar el reembolso en Stripe"},
+            )
+        data = r.json()
+        return ReembolsoInfo(
+            id=data["id"], payment_intent_id=payment_intent_id,
+            centavos_usd=int(data.get("amount", centavos_usd)), estado=data.get("status", "succeeded"),
         )

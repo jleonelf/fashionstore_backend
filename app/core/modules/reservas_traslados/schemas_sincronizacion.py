@@ -1,8 +1,9 @@
-"""Esquemas DTO para sincronización offline (CU04 / C34)."""
+"""Esquemas DTO para sincronización offline (CU04 / C34 y CU05 v3)."""
 import uuid
 from datetime import datetime
-from typing import Optional, List, Literal
-from pydantic import BaseModel, Field, ConfigDict, field_validator
+from decimal import Decimal
+from typing import Optional, List, Literal, Union, Dict, Any
+from pydantic import BaseModel, Field, ConfigDict, field_validator, model_validator
 
 
 class ReferenciaHorariaDTO(BaseModel):
@@ -20,7 +21,6 @@ class ReferenciaHorariaDTO(BaseModel):
     referencia_horaria_id: uuid.UUID = Field(..., description="UUID emitido por el servidor central")
     emitida_en: datetime = Field(..., description="Instante UTC en que se emitió la referencia")
     vence_en: datetime = Field(..., description="Fin de vigencia para crear operaciones offline (8 horas desde emisión)")
-
 
 
 class ReferenciaHorariaCrearDTO(BaseModel):
@@ -78,6 +78,7 @@ class ReferenciaHorariaDetalleDTO(BaseModel):
 class OperacionLineaDTO(BaseModel):
     variante_id: uuid.UUID = Field(..., description="UUID de la variante solicitada")
     cantidad: int = Field(..., gt=0, description="Cantidad solicitada (> 0)")
+    precio_visto_bob: Optional[Decimal] = None
 
 
 class OperacionDatosReservaDTO(BaseModel):
@@ -88,14 +89,54 @@ class OperacionDatosReservaDTO(BaseModel):
     lineas: List[OperacionLineaDTO] = Field(..., min_length=1, description="Líneas de prendas a reservar")
 
 
+class AutorizacionCobroV3DTO(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    # Contrato formal v3 (operacion.schema.json)
+    consentimiento_id: Optional[uuid.UUID] = None
+    aceptado_local_en: Optional[datetime] = None
+    huella_compra: Optional[str] = None
+    base_bob: Optional[Decimal] = None
+    descuento_bob: Optional[Decimal] = None
+    envio_bob: Optional[Decimal] = None
+    total_bob: Optional[Decimal] = None
+    moneda_cobro: Optional[Literal["USD"]] = "USD"
+    importe_cobro: Optional[Decimal] = None
+    tasa_id: Optional[uuid.UUID] = None
+    tasa_bob_por_usd: Optional[Union[Decimal, str]] = None
+    condiciones_version: Optional[str] = None
+    vigente_hasta: Optional[datetime] = None
+    preparacion_pago_id: Optional[uuid.UUID] = None
+    permite_cobro_al_reconectar: Optional[bool] = True
+
+    # Compatibilidad y alias
+    consentimiento: Optional[bool] = None
+    metodo_preparado_id: Optional[uuid.UUID] = None
+    huella_dispositivo: Optional[str] = None
+    importe_bob: Optional[Decimal] = None
+    importe_usd: Optional[Decimal] = None
+    tasa: Optional[Decimal] = None
+    vigencia_hasta: Optional[datetime] = None
+
+
+class OperacionDatosCompraDTO(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    sucursal_id: uuid.UUID
+    modalidad: Literal["RECOJO", "DELIVERY"] = "RECOJO"
+    direccion: Optional[str] = None
+    anillo_destino: Optional[int] = None
+    lineas: List[OperacionLineaDTO] = Field(min_length=1)
+    autorizacion_cobro: Optional[AutorizacionCobroV3DTO] = None
+
+
 class OperacionDTO(BaseModel):
     model_config = ConfigDict(
         from_attributes=True,
         json_schema_extra={
             "example": {
-                "version_esquema": 1,
+                "version_esquema": 3,
                 "operacion_id": "10000000-0000-4000-8000-000000000001",
-                "tipo": "SOLICITAR_RESERVA",
+                "tipo": "SOLICITAR_COMPRA",
                 "creada_local_en": "2026-10-18T10:00:00-04:00",
                 "empresa_id": "20000000-0000-4000-8000-000000000001",
                 "usuario_id": "30000000-0000-4000-8000-000000000001",
@@ -104,7 +145,7 @@ class OperacionDTO(BaseModel):
                 "referencia_horaria_id": "50000000-0000-4000-8000-000000000001",
                 "datos": {
                     "sucursal_id": "60000000-0000-4000-8000-000000000001",
-                    "visita_en": "2026-10-18T14:00:00-04:00",
+                    "modalidad": "RECOJO",
                     "lineas": [
                         {"variante_id": "70000000-0000-4000-8000-000000000001", "cantidad": 1}
                     ],
@@ -113,10 +154,10 @@ class OperacionDTO(BaseModel):
         },
     )
 
-    version_esquema: Literal[1] = Field(..., description="Versión del esquema de sincronización (solo 1 en esta entrega)")
+    version_esquema: Literal[1, 2, 3] = Field(..., description="Versión del esquema de sincronización (1, 2 o 3)")
     operacion_id: uuid.UUID = Field(..., description="UUID inmutable de la operación generado localmente")
     tipo: Literal["SOLICITAR_RESERVA", "SOLICITAR_COMPRA", "REGISTRAR_VENTA_CAJA"] = Field(
-        ..., description="Tipo de operación; en esta entrega únicamente SOLICITAR_RESERVA"
+        ..., description="Tipo de operación"
     )
     creada_local_en: datetime = Field(..., description="Fecha y hora de creación local en el dispositivo")
     empresa_id: uuid.UUID = Field(..., description="UUID de la empresa contratante")
@@ -126,7 +167,42 @@ class OperacionDTO(BaseModel):
     referencia_horaria_id: Optional[uuid.UUID] = Field(
         None, description="UUID de la referencia horaria emitida previamente por el servidor"
     )
-    datos: OperacionDatosReservaDTO = Field(..., description="Datos específicos de la operación de reserva")
+    datos: Union[OperacionDatosReservaDTO, OperacionDatosCompraDTO, Dict[str, Any]] = Field(
+        ..., description="Datos específicos de la operación de reserva o compra"
+    )
+
+    @model_validator(mode="before")
+    @classmethod
+    def validar_datos_segun_tipo(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            tipo = data.get("tipo")
+            v_esq = data.get("version_esquema", 1)
+            datos = data.get("datos")
+
+            if tipo == "SOLICITAR_RESERVA":
+                if v_esq != 1:
+                    raise ValueError("SOLICITAR_RESERVA solo admite version_esquema=1")
+                if isinstance(datos, dict):
+                    data["datos"] = OperacionDatosReservaDTO.model_validate(datos)
+            elif tipo == "REGISTRAR_VENTA_CAJA":
+                if v_esq != 1:
+                    raise ValueError("REGISTRAR_VENTA_CAJA solo admite version_esquema=1")
+            elif tipo == "SOLICITAR_COMPRA":
+                if v_esq not in (1, 2, 3):
+                    raise ValueError(f"version_esquema {v_esq} no soportada para SOLICITAR_COMPRA")
+                if isinstance(datos, dict):
+                    if v_esq == 2:
+                        if "modalidad" not in datos:
+                            raise ValueError("version_esquema 2 requiere modalidad")
+                        if datos.get("modalidad") == "DELIVERY" and not datos.get("direccion"):
+                            raise ValueError("modalidad DELIVERY en version 2 requiere direccion")
+                        if "autorizacion_cobro" in datos and datos["autorizacion_cobro"]:
+                            raise ValueError("version_esquema 2 no permite autorizacion_cobro")
+                    elif v_esq == 1:
+                        if "autorizacion_cobro" in datos and datos["autorizacion_cobro"]:
+                            raise ValueError("version_esquema 1 no permite autorizacion_cobro")
+                    data["datos"] = OperacionDatosCompraDTO.model_validate(datos)
+        return data
 
 
 class ResultadoOperacionDTO(BaseModel):
@@ -155,6 +231,9 @@ class ResultadoOperacionDTO(BaseModel):
         "REGISTRADA_CENTRAL",
         "CONCILIACION_REQUERIDA",
         "CONFLICTO",
+        "PENDIENTE_INTERVENCION",
+        "REQUIERE_NUEVA_ACEPTACION",
+        "REQUIERE_ACCION_CLIENTE",
     ]
     codigo: Literal[
         "OK",
@@ -167,6 +246,8 @@ class ResultadoOperacionDTO(BaseModel):
         "TASA_NO_VIGENTE",
         "OPERACION_MODIFICADA",
         "PAGO_EN_VERIFICACION",
+        "AUTORIZACION_REQUERIDA",
+        "ACCION_CLIENTE_REQUERIDA",
     ]
     recibida_en: datetime
     detalle: str
@@ -182,6 +263,4 @@ class ConflictoOperacionModificadaDTO(BaseModel):
 
 
 class ErrorOperacionModificadaDTO(BaseModel):
-    """Envoltorio HTTP real de un 409 emitido con HTTPException."""
-
     detail: ConflictoOperacionModificadaDTO

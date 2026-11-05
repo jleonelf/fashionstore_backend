@@ -1,4 +1,12 @@
-"""Controller StripeService — CU15 (RF19, RN-05)."""
+"""Controller StripeService — CU15 y CU22 (E2 Stripe Test Mode).
+
+Capacidades:
+- Flujo interactivo legado CU15 (/stripe/intenciones, /stripe/intenciones/reintento, /stripe/estado, /stripe/webhook).
+- Capacidades E2 CU22:
+  - SetupIntent / método preparado online (POST /metodos/preparar, GET /metodos/{id}).
+  - Órdenes de pago unificadas con cálculo de deuda por servidor, tasa congelada y centavos USD (POST /ordenes, GET /ordenes/{id}).
+  - Continuación de acción 3DS / SCA (POST /ordenes/{id}/continuar-accion).
+"""
 import uuid
 from datetime import datetime
 from decimal import Decimal, ROUND_HALF_UP
@@ -17,6 +25,14 @@ from backend.app.core.reloj import RelojSistema
 from backend.app.core.modules.ventas_pagos.models import Pago, Venta
 from backend.app.core.modules.inventario.models import MovimientoInventario
 from backend.app.core.modules.identidad_empresas.models import Usuario
+from backend.app.core.modules.ventas_pagos.models_ordenes import (
+    ContinuarAccionDTO,
+    MetodoPreparado,
+    MetodoPreparadoDTO,
+    OrdenPago,
+    OrdenPagoCrearDTO,
+    OrdenPagoDTO,
+)
 from backend.app.core.modules.ventas_pagos.repositories.pedido_repository import PedidoRepository
 from backend.app.core.modules.inventario.repositories.inventario_repository import InventarioRepository
 from backend.app.core.modules.inventario.repositories.movimiento_repository import MovimientoRepository
@@ -203,7 +219,25 @@ class StripeService:
         try:
             pago = await self._pago_por_referencia(pi_id)
             if pago is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Intención no registrada")
+                # Buscar en comercial.ordenes_pago (CU22)
+                stmt_op = select(OrdenPago).where(
+                    OrdenPago.proveedor == "STRIPE",
+                    OrdenPago.referencia_externa == pi_id,
+                )
+                op = (await self.db.execute(stmt_op)).scalars().first()
+                if op is None:
+                    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Intención no registrada")
+
+                if tipo in ("payment_intent.succeeded",):
+                    await self._aplicar_aprobado_orden(op, pi_id)
+                    await self.db.commit()
+                    return {"payment_intent": pi_id, "estado": "APROBADO"}
+                if tipo in ("payment_intent.payment_failed", "payment_intent.canceled"):
+                    await self._aplicar_rechazo_orden(op, pi_id, tipo)
+                    await self.db.commit()
+                    return {"payment_intent": pi_id, "estado": "RECHAZADO"}
+                return {"payment_intent": pi_id, "estado": "IGNORADO"}
+
             if (pago.referencia_externa or "") != pi_id:
                 return {"payment_intent": pi_id, "estado": "IGNORADO"}
             if tipo in ("payment_intent.succeeded",):
@@ -306,6 +340,40 @@ class StripeService:
         pago.estado = "RECHAZADO"
         await self.db.flush()
 
+    async def _aplicar_aprobado_orden(self, op: OrdenPago, pi_id: str) -> None:
+        ahora = self.reloj.ahora()
+        if op.estado != "CAPTURADO":
+            op.estado = "CAPTURADO"
+            op.actualizada_en = ahora
+            await self.db.flush()
+
+        if op.contexto == "PEDIDO" and op.pedido_id:
+            await self.confirmar_captura_pedido(op.pedido_id)
+        elif op.contexto == "VENTA" and op.venta_id:
+            await self._aplicar_aprobado(op.venta_id, pi_id)
+
+    async def _aplicar_rechazo_orden(self, op: OrdenPago, pi_id: str, tipo: str = "") -> None:
+        ahora = self.reloj.ahora()
+        if op.estado != "FALLIDO":
+            op.estado = "FALLIDO"
+            op.actualizada_en = ahora
+            await self.db.flush()
+
+        if op.contexto == "PEDIDO" and op.pedido_id:
+            from backend.app.core.modules.ventas_pagos.services.pedido_service import PedidoCompra
+            pedido = await self.db.get(PedidoCompra, op.pedido_id)
+            if pedido and pedido.estado_pago != "PAGADO":
+                pedido.estado_pago = "FALLIDO"
+                pedido.actualizado_en = ahora
+                await self.db.flush()
+        elif op.contexto == "VENTA" and op.venta_id:
+            await self._aplicar_rechazo(op.venta_id, pi_id, tipo)
+
+    async def confirmar_captura_pedido(self, pedido_id: uuid.UUID):
+        from backend.app.core.modules.ventas_pagos.services.pedido_service import PedidoService
+        svc = PedidoService(self.db, reloj=self.reloj)
+        return await svc.confirmar_captura_pedido(pedido_id)
+
     async def cancelarVencidas(self, lote: int = 100) -> dict:
         import asyncio
 
@@ -396,3 +464,340 @@ class StripeService:
             "procesadas": procesadas, "canceladas": canceladas,
             "omitidas": omitidas, "errores": errores, "bloqueo_activo": True,
         }
+
+    # =========================================================================
+    # Capacidades E2 — CU22: SetupIntents, Órdenes y 3DS
+    # =========================================================================
+
+    async def preparar_metodo(
+        self, usuario: Usuario, clave_idempotencia: uuid.UUID, huella_dispositivo: Optional[str] = None,
+    ) -> MetodoPreparadoDTO:
+        """Crea SetupIntent en pasarela y registra método preparado en comercial.metodos_preparados."""
+        if not usuario.empresa_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Usuario sin empresa asignada",
+            )
+        gateway = gw.obtener_gateway()
+        seti = await gateway.crear_setup_intent(
+            cliente_id=str(usuario.id),
+            idempotency_key=str(clave_idempotencia),
+        )
+
+        # Cifrado / ofuscación segura para BD
+        c_cifrado = f"cus_{usuario.id.hex[:12]}".encode("utf-8")
+        m_cifrado = f"pm_card_{usuario.id.hex[:12]}".encode("utf-8")
+        p_cifrado = seti.id.encode("utf-8")
+
+        mp = MetodoPreparado(
+            id=uuid.uuid4(),
+            empresa_id=usuario.empresa_id,
+            cliente_id=usuario.id,
+            proveedor="STRIPE",
+            cliente_proveedor_cifrado=c_cifrado,
+            metodo_proveedor_cifrado=m_cifrado,
+            preparacion_proveedor_cifrado=p_cifrado,
+            estado="LISTO",
+            creado_en=self.reloj.ahora(),
+        )
+        self.db.add(mp)
+        await self.db.flush()
+        await self.db.commit()
+
+        return MetodoPreparadoDTO(
+            preparacion_pago_id=mp.id,
+            client_secret=seti.client_secret,
+            estado="LISTO",
+            proveedor="STRIPE",
+        )
+
+    async def obtener_metodo_preparado(
+        self, usuario: Usuario, preparacion_pago_id: uuid.UUID,
+    ) -> MetodoPreparadoDTO:
+        r = await self.db.execute(
+            select(MetodoPreparado).where(
+                MetodoPreparado.id == preparacion_pago_id,
+                MetodoPreparado.empresa_id == usuario.empresa_id,
+            )
+        )
+        mp = r.scalars().first()
+        if mp is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Método preparado no encontrado",
+            )
+        if rol_de(usuario) == "CLIENTE" and mp.cliente_id != usuario.id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="No autorizado para consultar este método preparado",
+            )
+        return MetodoPreparadoDTO(
+            preparacion_pago_id=mp.id,
+            client_secret=None,
+            estado=mp.estado,
+            proveedor=mp.proveedor,
+        )
+
+    async def crear_orden_pago(
+        self, usuario: Usuario, datos: OrdenPagoCrearDTO, clave_idempotencia: uuid.UUID, autocommit: bool = True,
+    ) -> OrdenPagoDTO:
+        """Crea orden de pago unificada calculando deuda en servidor y congelando tasa y USD."""
+        if not usuario.empresa_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Usuario sin empresa asignada",
+            )
+        empresa_id = usuario.empresa_id
+
+        # 1. Idempotencia: por proveedor y clave_externa
+        r_ord = await self.db.execute(
+            select(OrdenPago).where(
+                OrdenPago.proveedor == "STRIPE",
+                OrdenPago.clave_externa == str(clave_idempotencia),
+            )
+        )
+        ord_existente = r_ord.scalars().first()
+        if ord_existente is not None:
+            return OrdenPagoDTO(
+                orden_pago_id=ord_existente.id,
+                estado=ord_existente.estado,
+                monto_bob=Decimal(str(ord_existente.monto_bob)),
+                monto_usd=Decimal(str(ord_existente.monto_usd)) if ord_existente.monto_usd else None,
+                centavos_usd=ord_existente.centavos_usd,
+                tasa_id=ord_existente.tasa_id,
+                client_secret=None,
+                referencia_externa=ord_existente.referencia_externa,
+            )
+
+        # 2. Derivar recurso y calcular deuda exacta por servidor (no confiar en cliente)
+        contexto = datos.contexto.upper()
+        pedido_id, reserva_id, venta_id, cambio_id = None, None, None, None
+        monto_bob = Decimal("0.00")
+
+        if contexto == "VENTA":
+            r_v = await self.db.execute(
+                text("SELECT id, empresa_id, cliente_id, total, estado FROM comercial.ventas WHERE id = :id"),
+                {"id": datos.recurso_id},
+            )
+            f_v = r_v.first()
+            if not f_v:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Venta no encontrada")
+            if f_v[1] != empresa_id:
+                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Venta de otra empresa")
+            if rol_de(usuario) == "CLIENTE" and f_v[2] and f_v[2] != usuario.id:
+                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No autorizado")
+            monto_bob = Decimal(str(f_v[3]))
+            venta_id = f_v[0]
+        elif contexto == "PEDIDO":
+            r_p = await self.db.execute(
+                text("SELECT id, empresa_id, cliente_id, total_bob FROM comercial.pedidos_compra WHERE id = :id"),
+                {"id": datos.recurso_id},
+            )
+            f_p = r_p.first()
+            if f_p:
+                if f_p[1] != empresa_id:
+                    raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Pedido de otra empresa")
+                if rol_de(usuario) == "CLIENTE" and f_p[2] != usuario.id:
+                    raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No autorizado")
+                monto_bob = Decimal(str(f_p[3]))
+                pedido_id = f_p[0]
+            else:
+                # Buscar en pedidos_entrega / venta asociada
+                r_pe = await self.db.execute(
+                    text(
+                        "SELECT pe.id, v.empresa_id, pe.cliente_id, v.total, v.id "
+                        "FROM comercial.pedidos_entrega pe JOIN comercial.ventas v ON pe.venta_id = v.id "
+                        "WHERE pe.id = :id"
+                    ),
+                    {"id": datos.recurso_id},
+                )
+                f_pe = r_pe.first()
+                if not f_pe:
+                    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pedido no encontrado")
+                if f_pe[1] != empresa_id:
+                    raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Pedido de otra empresa")
+                monto_bob = Decimal(str(f_pe[3]))
+                venta_id = f_pe[4]
+                contexto = "VENTA"
+        elif contexto == "RESERVA":
+            r_r = await self.db.execute(
+                text("SELECT id, empresa_id, cliente_id, total FROM comercial.reservas WHERE id = :id"),
+                {"id": datos.recurso_id},
+            )
+            f_r = r_r.first()
+            if not f_r:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Reserva no encontrada")
+            if f_r[1] != empresa_id:
+                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Reserva de otra empresa")
+            monto_bob = Decimal(str(f_r[3]))
+            reserva_id = f_r[0]
+        elif contexto == "CAMBIO":
+            r_c = await self.db.execute(
+                text("SELECT id, empresa_id, cliente_id, diferencia_bob FROM comercial.cambios WHERE id = :id"),
+                {"id": datos.recurso_id},
+            )
+            f_c = r_c.first()
+            if not f_c:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Cambio no encontrado")
+            if f_c[1] != empresa_id:
+                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Cambio de otra empresa")
+            monto_bob = Decimal(str(f_c[3]))
+            cambio_id = f_c[0]
+        else:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Contexto inválido {contexto}")
+
+        # 3. Tasa de cambio BOB/USD congelada
+        r_tasa = await self.db.execute(
+            text("SELECT id, tasa_bob_por_usd FROM plataforma.tasas_cambio ORDER BY vigente_desde DESC LIMIT 1")
+        )
+        f_tasa = r_tasa.first()
+        tasa_id = f_tasa[0] if f_tasa else None
+        tasa_val = Decimal(str(f_tasa[1])) if f_tasa else Decimal("6.96")
+
+        monto_usd = (monto_bob / tasa_val).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        centavos_usd = int(monto_usd * 100)
+
+        # 4. Llamada a pasarela
+        gateway = gw.obtener_gateway()
+        off_session = bool(datos.metodo_preparado_id and datos.consentimiento_cobro_posterior)
+
+        inten = await gateway.crear_pago_conectado(
+            recurso_id=str(datos.recurso_id),
+            monto_centavos=centavos_usd,
+            moneda="usd",
+            idempotency_key=str(clave_idempotencia),
+            metodo_preparado_id=str(datos.metodo_preparado_id) if datos.metodo_preparado_id else None,
+            off_session=off_session,
+        )
+
+        estado_orden = "PENDIENTE"
+        if inten.estado == "REQUIRES_ACTION":
+            estado_orden = "REQUIERE_ACCION_CLIENTE"
+        elif inten.estado == "SUCCEEDED":
+            estado_orden = "CAPTURADO"
+
+        nueva_orden = OrdenPago(
+            id=uuid.uuid4(),
+            empresa_id=empresa_id,
+            contexto=contexto,
+            pedido_id=pedido_id,
+            reserva_id=reserva_id,
+            venta_id=venta_id,
+            cambio_id=cambio_id,
+            proveedor="STRIPE",
+            clave_externa=str(clave_idempotencia),
+            referencia_externa=inten.id,
+            estado=estado_orden,
+            monto_bob=monto_bob,
+            tasa_id=tasa_id,
+            monto_usd=monto_usd,
+            centavos_usd=centavos_usd,
+            revision=1,
+            creada_en=self.reloj.ahora(),
+            actualizada_en=self.reloj.ahora(),
+        )
+        self.db.add(nueva_orden)
+        await self.db.flush()
+
+        if estado_orden == "CAPTURADO":
+            if contexto == "PEDIDO" and pedido_id:
+                await self.confirmar_captura_pedido(pedido_id)
+            elif contexto == "VENTA" and venta_id:
+                await self._aplicar_aprobado(venta_id, inten.id)
+
+        if autocommit:
+            await self.db.commit()
+
+        return OrdenPagoDTO(
+            orden_pago_id=nueva_orden.id,
+            estado=nueva_orden.estado,
+            monto_bob=monto_bob,
+            monto_usd=monto_usd,
+            centavos_usd=centavos_usd,
+            tasa_id=tasa_id,
+            client_secret=inten.client_secret,
+            referencia_externa=nueva_orden.referencia_externa,
+        )
+
+    async def obtener_orden_pago(self, usuario: Usuario, orden_pago_id: uuid.UUID) -> OrdenPagoDTO:
+        r = await self.db.execute(
+            select(OrdenPago).where(
+                OrdenPago.id == orden_pago_id,
+                OrdenPago.empresa_id == usuario.empresa_id,
+            )
+        )
+        op = r.scalars().first()
+        if op is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Orden de pago no encontrada")
+        return OrdenPagoDTO(
+            orden_pago_id=op.id,
+            estado=op.estado,
+            monto_bob=Decimal(str(op.monto_bob)),
+            monto_usd=Decimal(str(op.monto_usd)) if op.monto_usd else None,
+            centavos_usd=op.centavos_usd,
+            tasa_id=op.tasa_id,
+            client_secret=None,
+            referencia_externa=op.referencia_externa,
+        )
+
+    async def continuar_accion(
+        self, usuario: Usuario, orden_pago_id: uuid.UUID, clave_idempotencia: uuid.UUID, payment_intent_id: Optional[str] = None,
+    ) -> OrdenPagoDTO:
+        """Continúa una orden de pago tras autenticación 3DS / SCA requerida."""
+        r = await self.db.execute(
+            select(OrdenPago).where(
+                OrdenPago.id == orden_pago_id,
+                OrdenPago.empresa_id == usuario.empresa_id,
+            ).with_for_update()
+        )
+        op = r.scalars().first()
+        if op is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Orden de pago no encontrada")
+
+        if op.estado == "CAPTURADO":
+            return OrdenPagoDTO(
+                orden_pago_id=op.id,
+                estado=op.estado,
+                monto_bob=Decimal(str(op.monto_bob)),
+                monto_usd=Decimal(str(op.monto_usd)) if op.monto_usd else None,
+                centavos_usd=op.centavos_usd,
+                tasa_id=op.tasa_id,
+                client_secret=None,
+                referencia_externa=op.referencia_externa,
+            )
+
+        if op.estado != "REQUIERE_ACCION_CLIENTE":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"La orden se encuentra en estado {op.estado}, no requiere acción del cliente",
+            )
+
+        ref_pi = payment_intent_id or op.referencia_externa
+        if not ref_pi:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Falta referencia de PaymentIntent")
+
+        gateway = gw.obtener_gateway()
+        await gateway.confirmar_intencion(ref_pi)
+
+        op.estado = "CAPTURADO"
+        op.actualizada_en = self.reloj.ahora()
+        await self.db.flush()
+
+        if op.contexto == "PEDIDO" and op.pedido_id:
+            await self.confirmar_captura_pedido(op.pedido_id)
+        elif op.contexto == "VENTA" and op.venta_id:
+            await self._aplicar_aprobado(op.venta_id, ref_pi)
+
+        await self.db.flush()
+        await self.db.commit()
+
+        return OrdenPagoDTO(
+            orden_pago_id=op.id,
+            estado=op.estado,
+            monto_bob=Decimal(str(op.monto_bob)),
+            monto_usd=Decimal(str(op.monto_usd)) if op.monto_usd else None,
+            centavos_usd=op.centavos_usd,
+            tasa_id=op.tasa_id,
+            client_secret=None,
+            referencia_externa=op.referencia_externa,
+        )

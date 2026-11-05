@@ -1,4 +1,4 @@
-"""Controller ReporteService — CU23 (RF24)."""
+"""Controller ReporteService — CU25 (Ventas por Sucursal con fecha central y física Bolivia)."""
 import uuid
 from datetime import datetime
 from decimal import Decimal
@@ -51,21 +51,35 @@ class ReporteService:
         items = []
         unidades = 0
         monto = Decimal("0")
+        subtotal_bruto = Decimal("0")
+        total_descuentos = Decimal("0")
         costo = Decimal("0")
         for v in ventas:
             uds = sum(d.cantidad for d in v.detalles)
             cto = sum(Decimal(str(d.costo_promedio or 0)) * d.cantidad for d in v.detalles)
             unidades += uds
             monto += Decimal(str(v.total or 0))
+            subtotal_bruto += Decimal(str(v.subtotal or v.total or 0))
+            total_descuentos += Decimal(str(v.descuento or 0))
             costo += cto
+            fecha_central = getattr(v, "recibida_central_en", None) or v.creada_en
+            fecha_local = getattr(v, "vendida_local_en", None) or v.creada_en
             items.append(
                 VentaSucursalItemDTO(
-                    id=v.id, numero=v.numero, creada_en=v.creada_en,
-                    cliente_id=v.cliente_id, reserva_id=v.reserva_id,
+                    id=v.id,
+                    numero=v.numero,
+                    creada_en=v.creada_en,
+                    fecha_central=fecha_central,
+                    fecha_fisica_local=fecha_local,
+                    cliente_id=v.cliente_id,
+                    reserva_id=v.reserva_id,
                     canal=v.canal if isinstance(v.canal, str) else str(v.canal),
                     estado=v.estado if isinstance(v.estado, str) else v.estado.name,
-                    unidades=uds, subtotal=v.subtotal, descuento=v.descuento,
-                    adelanto_descontado=v.adelanto_descontado, total=v.total,
+                    unidades=uds,
+                    subtotal=v.subtotal,
+                    descuento=v.descuento,
+                    adelanto_descontado=v.adelanto_descontado,
+                    total=v.total,
                     costo_total=cto if con_costos else None,
                     margen_bruto=(Decimal(str(v.total or 0)) - cto) if con_costos else None,
                 )
@@ -77,5 +91,10 @@ class ReporteService:
             ticket_promedio=(monto / total).quantize(Decimal("0.01")) if total else Decimal("0.00"),
             costo_total=costo if con_costos else None,
             margen_bruto_total=(monto - costo) if con_costos else None,
+            ventas_brutas=subtotal_bruto,
+            total_descuentos=total_descuentos,
+            total_devoluciones=Decimal("0.00"),
+            total_reembolsos=Decimal("0.00"),
+            neto_comercial=monto,
         )
         return VentasSucursalDTO(total=total, limit=limit, offset=offset, resumen=resumen, items=items)

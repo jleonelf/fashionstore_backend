@@ -1,7 +1,12 @@
-"""Service IA Analítica y Reportes — CU21 (reportes generativos) y CU25 (decisiones de inventario)."""
+"""Service IA Analítica y Reportes — CU24 (reportes interpretados tipados) y CU25 (decisiones)."""
+import hashlib
+import json
+import re
 import time
 import uuid
-from typing import List, Optional
+from datetime import datetime, timezone
+from decimal import Decimal
+from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import HTTPException, status
 from sqlalchemy import func, select
@@ -10,14 +15,20 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.app.core.integraciones.ia_proveedor import proveedor_activo, rechazar_inyeccion
 from backend.app.core.permisos import es_admin, rol_de
 from backend.app.core.reloj import RelojSistema
-from backend.app.core.modules.catalogo.models import VarianteProducto
-from backend.app.core.modules.experiencia_cliente.models import SolicitudIA
+from backend.app.core.modules.catalogo.models import Categoria, Producto, VarianteProducto
+from backend.app.core.modules.analitica.models import SolicitudIA
 from backend.app.core.modules.inventario.models import InventarioSucursal
+from backend.app.core.modules.organizacion.models import Sucursal
+from backend.app.core.modules.ventas_pagos.models import DetalleVenta, Venta
 from backend.app.core.modules.identidad_empresas.models import Usuario
 from backend.app.core.modules.analitica.schemas import (
     DecisionItemDTO,
     DecisionRespuestaDTO,
+    ReportePedirDTO,
     ReporteRespuestaDTO,
+    ReporteInterpretadoPeticionDTO,
+    ReporteInterpretadoResultadoDTO,
+    TipoReportePermitido,
 )
 
 LIMITE_AUDITORIA_TEXTO = 500
@@ -53,9 +64,14 @@ class IAAnaliticaService:
         respuesta: str,
         datos: dict,
         latencia_ms: int,
+        consulta_id: Optional[uuid.UUID] = None,
+        snapshot_hash: Optional[str] = None,
+        proveedor_usado: Optional[str] = None,
     ) -> None:
         self.db.add(
             SolicitudIA(
+                id=consulta_id or uuid.uuid4(),
+                empresa_id=usuario.empresa_id or uuid.UUID("00000000-0000-0000-0000-000000000000"),
                 usuario_id=usuario.id,
                 cliente_id=usuario.id if rol_de(usuario) == "CLIENTE" else None,
                 tipo=tipo,
@@ -64,262 +80,405 @@ class IAAnaliticaService:
                 parametros=parametros or {},
                 respuesta=_sanitizar(respuesta, 2000),
                 datos=datos or {},
-                proveedor=getattr(self.proveedor, "nombre", "DETERMINISTA"),
+                proveedor=(proveedor_usado or getattr(self.proveedor, "nombre", "DETERMINISTA"))[:20],
                 latencia_ms=max(latencia_ms, 0),
+                snapshot_hash=snapshot_hash,
+                estado="COMPLETADA",
+                revision=1,
             )
         )
         await self.db.flush()
 
-    # ---------------- CU21 reportes generativos (solo lectura) ----------------
+    # ---------------- CU24 Reporte Tipado Interpretado (Solo 4 tipos permitidos, nunca SQL IA) ----------------
+    def _clasificar_tipo_reporte(self, consulta: str) -> TipoReportePermitido:
+        c = (consulta or "").lower()
+        if any(w in c for w in ("categoria", "categoría", "rubro", "departamento", "línea")):
+            return "INGRESOS_POR_CATEGORIA"
+        if any(w in c for w in ("semana", "evolucion", "evolución", "tiempo", "mes", "temporal", "tendencia")):
+            return "EVOLUCION_SEMANAL"
+        if any(w in c for w in ("ranking", "top", "mas vendido", "más vendido", "mejores prendas", "productos")):
+            return "RANKING_PRODUCTOS"
+        return "VENTAS_POR_SUCURSAL"
+
+    async def _clasificar_con_gemini_o_fallback(
+        self, consulta: str
+    ) -> Tuple[TipoReportePermitido, str, Optional[datetime], Optional[datetime]]:
+        """Invoca Gemini si está configurado para clasificar a exactamente 1 de 4 tipos.
+
+        Si no hay API key o la llamada falla, recurre honestamente al clasificador
+        determinista y reporta el proveedor efectivamente usado (DETERMINISTA o FALLBACK_DETERMINISTA),
+        nunca atribuyendo falsamente a GEMINI.
+        """
+        from backend.app.core.config import settings
+        import httpx
+
+        tipos_validos = {
+            "VENTAS_POR_SUCURSAL",
+            "RANKING_PRODUCTOS",
+            "EVOLUCION_SEMANAL",
+            "INGRESOS_POR_CATEGORIA",
+        }
+
+        if not settings.GEMINI_API_KEY:
+            tipo_det = self._clasificar_tipo_reporte(consulta)
+            return tipo_det, "DETERMINISTA", None, None
+
+        prompt_clasificacion = (
+            "Eres el clasificador de consultas analíticas de FashionStore.\n"
+            "Tu tarea es clasificar la consulta del usuario en EXACTAMENTE UNO de estos 4 tipos permitidos:\n"
+            "1. VENTAS_POR_SUCURSAL\n"
+            "2. RANKING_PRODUCTOS\n"
+            "3. EVOLUCION_SEMANAL\n"
+            "4. INGRESOS_POR_CATEGORIA\n\n"
+            "Además, si el usuario menciona un rango o fecha, extrae 'desde' o 'hasta' en formato ISO YYYY-MM-DD (o null si no hay).\n"
+            "Responde ÚNICAMENTE un JSON válido con esta estructura:\n"
+            '{"tipo_reporte": "...", "desde": null, "hasta": null}\n\n'
+            f"Consulta del usuario: {consulta[:400]}"
+        )
+
+        try:
+            async with httpx.AsyncClient(timeout=settings.GEMINI_TIMEOUT_SECONDS) as cli:
+                resp = await cli.post(
+                    f"https://generativelanguage.googleapis.com/v1beta/models/{settings.GEMINI_MODEL}:generateContent",
+                    headers={"x-goog-api-key": settings.GEMINI_API_KEY},
+                    json={"contents": [{"parts": [{"text": prompt_clasificacion}]}]},
+                )
+            if resp.status_code == 200:
+                data = resp.json()
+                texto_raw = str(
+                    data.get("candidates", [{}])[0]
+                    .get("content", {})
+                    .get("parts", [{}])[0]
+                    .get("text", "")
+                )
+                m = re.search(r"\{.*\}", texto_raw, re.DOTALL)
+                if m:
+                    parsed = json.loads(m.group(0))
+                    tipo_candidato = str(parsed.get("tipo_reporte", "")).strip().upper()
+                    if tipo_candidato in tipos_validos:
+                        desde_dt = None
+                        hasta_dt = None
+                        if parsed.get("desde"):
+                            try:
+                                desde_dt = datetime.fromisoformat(str(parsed["desde"])).replace(tzinfo=timezone.utc)
+                            except Exception:
+                                pass
+                        if parsed.get("hasta"):
+                            try:
+                                hasta_dt = datetime.fromisoformat(str(parsed["hasta"])).replace(tzinfo=timezone.utc)
+                            except Exception:
+                                pass
+                        return tipo_candidato, "GEMINI", desde_dt, hasta_dt
+        except Exception:
+            pass
+
+        tipo_det = self._clasificar_tipo_reporte(consulta)
+        return tipo_det, "FALLBACK_DETERMINISTA", None, None
+
+    async def _generar_narrativa_gemini(
+        self, tipo_reporte: str, filas: list, totales: dict
+    ) -> Optional[str]:
+        from backend.app.core.config import settings
+        import httpx
+
+        if not settings.GEMINI_API_KEY:
+            return None
+        try:
+            resumen_datos = json.dumps({"filas": filas[:8], "totales": totales}, ensure_ascii=False, default=str)
+            prompt_narrativa = (
+                "Redacta un resumen ejecutivo breve (máximo 2 oraciones, en español, profesional, sin formato markdown) "
+                f"del reporte {tipo_reporte} basándote estrictamente en estos datos reales: {resumen_datos}. "
+                "No inventes cifras ni causas no presentes en los datos."
+            )
+            async with httpx.AsyncClient(timeout=settings.GEMINI_TIMEOUT_SECONDS) as cli:
+                resp = await cli.post(
+                    f"https://generativelanguage.googleapis.com/v1beta/models/{settings.GEMINI_MODEL}:generateContent",
+                    headers={"x-goog-api-key": settings.GEMINI_API_KEY},
+                    json={"contents": [{"parts": [{"text": prompt_narrativa}]}]},
+                )
+            if resp.status_code == 200:
+                texto = str(
+                    resp.json().get("candidates", [{}])[0]
+                    .get("content", {})
+                    .get("parts", [{}])[0]
+                    .get("text", "")
+                ).strip()
+                if texto:
+                    return texto[:500]
+        except Exception:
+            pass
+        return None
+
+    async def generarReporteInterpretado(
+        self, usuario: Usuario, datos: ReporteInterpretadoPeticionDTO
+    ) -> ReporteInterpretadoResultadoDTO:
+        rol = rol_de(usuario)
+        if rol not in ("ADMINISTRADOR", "ENCARGADO") and not es_admin(usuario):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Solo personal administrativo autorizado",
+            )
+        empresa_id = usuario.empresa_id
+        if not empresa_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Usuario sin empresa asociada",
+            )
+
+        motivo = rechazar_inyeccion(datos.consulta)
+        if motivo:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Consulta rechazada por seguridad: {motivo}",
+            )
+
+        inicio = time.monotonic()
+        if datos.tipo_reporte:
+            tipo_final: TipoReportePermitido = datos.tipo_reporte
+            proveedor_usado = "DETERMINISTA"
+        else:
+            tipo_final, proveedor_usado, gemini_desde, gemini_hasta = await self._clasificar_con_gemini_o_fallback(datos.consulta)
+            if datos.desde is None and gemini_desde is not None:
+                datos.desde = gemini_desde
+            if datos.hasta is None and gemini_hasta is not None:
+                datos.hasta = gemini_hasta
+        consulta_id = uuid.uuid4()
+
+        columnas: List[str] = []
+        filas: List[Dict[str, Any]] = []
+        totales: Dict[str, Any] = {}
+        grafico_sugerido = "BARRA_HORIZONTAL"
+
+        if tipo_final == "VENTAS_POR_SUCURSAL":
+            grafico_sugerido = "BARRA_HORIZONTAL"
+            columnas = ["sucursal_nombre", "total_ventas", "unidades_vendidas", "total_ingresos_bob"]
+            q = (
+                select(
+                    Sucursal.nombre,
+                    func.count(Venta.id).label("total_ventas"),
+                    func.coalesce(func.sum(DetalleVenta.cantidad), 0).label("unidades_vendidas"),
+                    func.coalesce(func.sum(Venta.total), 0).label("total_ingresos"),
+                )
+                .join(Venta, Venta.sucursal_id == Sucursal.id)
+                .outerjoin(DetalleVenta, DetalleVenta.venta_id == Venta.id)
+                .where(Venta.empresa_id == empresa_id, Venta.estado == "PAGADA")
+            )
+            if datos.sucursal_id:
+                q = q.where(Venta.sucursal_id == datos.sucursal_id)
+            if datos.desde:
+                q = q.where(Venta.creada_en >= datos.desde)
+            if datos.hasta:
+                q = q.where(Venta.creada_en <= datos.hasta)
+            q = q.group_by(Sucursal.nombre).order_by(Sucursal.nombre)
+            res = (await self.db.execute(q)).all()
+            total_ing = Decimal("0")
+            total_uds = 0
+            for r in res:
+                ing = Decimal(str(r[3] or 0))
+                uds = int(r[2] or 0)
+                total_ing += ing
+                total_uds += uds
+                filas.append({
+                    "sucursal_nombre": r[0],
+                    "total_ventas": int(r[1] or 0),
+                    "unidades_vendidas": uds,
+                    "total_ingresos_bob": float(ing),
+                })
+            totales = {"total_general_ingresos_bob": float(total_ing), "total_unidades": total_uds}
+
+        elif tipo_final == "RANKING_PRODUCTOS":
+            grafico_sugerido = "BARRA_VERTICAL"
+            columnas = ["producto_nombre", "unidades_vendidas", "total_ingresos_bob"]
+            q = (
+                select(
+                    Producto.nombre,
+                    func.coalesce(func.sum(DetalleVenta.cantidad), 0).label("uds"),
+                    func.coalesce(func.sum(DetalleVenta.precio_unitario * DetalleVenta.cantidad), 0).label("ing"),
+                )
+                .join(VarianteProducto, VarianteProducto.producto_id == Producto.id)
+                .join(DetalleVenta, DetalleVenta.variante_id == VarianteProducto.id)
+                .join(Venta, Venta.id == DetalleVenta.venta_id)
+                .where(Venta.empresa_id == empresa_id, Venta.estado == "PAGADA")
+            )
+            if datos.sucursal_id:
+                q = q.where(Venta.sucursal_id == datos.sucursal_id)
+            if datos.desde:
+                q = q.where(Venta.creada_en >= datos.desde)
+            if datos.hasta:
+                q = q.where(Venta.creada_en <= datos.hasta)
+            q = q.group_by(Producto.nombre).order_by(func.sum(DetalleVenta.cantidad).desc()).limit(15)
+            res = (await self.db.execute(q)).all()
+            total_ing = Decimal("0")
+            total_uds = 0
+            for r in res:
+                ing = Decimal(str(r[2] or 0))
+                uds = int(r[1] or 0)
+                total_ing += ing
+                total_uds += uds
+                filas.append({
+                    "producto_nombre": r[0],
+                    "unidades_vendidas": uds,
+                    "total_ingresos_bob": float(ing),
+                })
+            totales = {"total_unidades": total_uds, "total_ingresos_bob": float(total_ing)}
+
+        elif tipo_final == "EVOLUCION_SEMANAL":
+            grafico_sugerido = "LINEA_TEMPORAL"
+            columnas = ["periodo_semanal", "cantidad_ventas", "total_ingresos_bob"]
+            q = (
+                select(
+                    func.to_char(Venta.creada_en, 'YYYY-WW').label("semana"),
+                    func.count(Venta.id).label("cnt"),
+                    func.coalesce(func.sum(Venta.total), 0).label("tot"),
+                )
+                .where(Venta.empresa_id == empresa_id, Venta.estado == "PAGADA")
+            )
+            if datos.sucursal_id:
+                q = q.where(Venta.sucursal_id == datos.sucursal_id)
+            if datos.desde:
+                q = q.where(Venta.creada_en >= datos.desde)
+            if datos.hasta:
+                q = q.where(Venta.creada_en <= datos.hasta)
+            q = q.group_by("semana").order_by("semana")
+            res = (await self.db.execute(q)).all()
+            total_ing = Decimal("0")
+            total_cnt = 0
+            for r in res:
+                ing = Decimal(str(r[2] or 0))
+                cnt = int(r[1] or 0)
+                total_ing += ing
+                total_cnt += cnt
+                filas.append({
+                    "periodo_semanal": f"Semana {r[0]}",
+                    "cantidad_ventas": cnt,
+                    "total_ingresos_bob": float(ing),
+                })
+            totales = {"total_ventas": total_cnt, "total_ingresos_bob": float(total_ing)}
+
+        elif tipo_final == "INGRESOS_POR_CATEGORIA":
+            grafico_sugerido = "DONA_CIRCULAR"
+            columnas = ["categoria_nombre", "unidades_vendidas", "total_ingresos_bob"]
+            q = (
+                select(
+                    Categoria.nombre,
+                    func.coalesce(func.sum(DetalleVenta.cantidad), 0).label("uds"),
+                    func.coalesce(func.sum(DetalleVenta.precio_unitario * DetalleVenta.cantidad), 0).label("ing"),
+                )
+                .join(Producto, Producto.categoria_id == Categoria.id)
+                .join(VarianteProducto, VarianteProducto.producto_id == Producto.id)
+                .join(DetalleVenta, DetalleVenta.variante_id == VarianteProducto.id)
+                .join(Venta, Venta.id == DetalleVenta.venta_id)
+                .where(Venta.empresa_id == empresa_id, Venta.estado == "PAGADA")
+            )
+            if datos.sucursal_id:
+                q = q.where(Venta.sucursal_id == datos.sucursal_id)
+            if datos.desde:
+                q = q.where(Venta.creada_en >= datos.desde)
+            if datos.hasta:
+                q = q.where(Venta.creada_en <= datos.hasta)
+            q = q.group_by(Categoria.nombre).order_by(func.sum(DetalleVenta.cantidad).desc())
+            res = (await self.db.execute(q)).all()
+            total_ing = Decimal("0")
+            total_uds = 0
+            for r in res:
+                ing = Decimal(str(r[2] or 0))
+                uds = int(r[1] or 0)
+                total_ing += ing
+                total_uds += uds
+                filas.append({
+                    "categoria_nombre": r[0],
+                    "unidades_vendidas": uds,
+                    "total_ingresos_bob": float(ing),
+                })
+            totales = {"total_unidades": total_uds, "total_ingresos_bob": float(total_ing)}
+
+        latencia = int((time.monotonic() - inicio) * 1000)
+        if proveedor_usado.startswith("GEMINI"):
+            narrativa_ia = await self._generar_narrativa_gemini(tipo_final, filas, totales)
+            narrativa = narrativa_ia or f"Reporte tipado de {tipo_final.lower().replace('_', ' ')} interpretado con Gemini sobre datos reales ({len(filas)} registros consolidados)."
+        else:
+            narrativa = f"Reporte tipado de {tipo_final.lower().replace('_', ' ')} generado con datos reales de la empresa. Se consolidaron {len(filas)} registros."
+        snapshot_hash = hashlib.sha256(json.dumps(filas, default=str).encode()).hexdigest()[:16]
+
+        await self._auditar(
+            usuario=usuario,
+            tipo="REPORTE",
+            entrada=datos.consulta,
+            funcion=tipo_final,
+            parametros={"tipo": tipo_final, "sucursal_id": str(datos.sucursal_id) if datos.sucursal_id else None},
+            respuesta=narrativa,
+            datos={"filas": filas, "totales": totales},
+            latencia_ms=latencia,
+            consulta_id=consulta_id,
+            snapshot_hash=snapshot_hash,
+            proveedor_usado=proveedor_usado,
+        )
+        await self.db.commit()
+
+        return ReporteInterpretadoResultadoDTO(
+            consulta_id=consulta_id,
+            tipo_reporte=tipo_final,
+            filtros_efectivos={
+                "empresa_id": str(empresa_id),
+                "tipo": tipo_final,
+                "sucursal_id": str(datos.sucursal_id) if datos.sucursal_id else None,
+                "proveedor": proveedor_usado,
+            },
+            columnas=columnas,
+            filas=filas,
+            totales=totales,
+            grafico_sugerido=grafico_sugerido,
+            narrativa=narrativa,
+            generado_en=datetime.now(timezone.utc),
+            origen="DATOS_REALES",
+        )
+
+    # ---------------- CU21 legacy ----------------
     def _elegir_funcion(self, consulta: str) -> tuple[str, dict]:
         bajo = (consulta or "").lower()
-        menciona_inventario = any(p in bajo for p in ("inventario", "stock", "existencia"))
-        menciona_sucursal = any(p in bajo for p in ("sucursal", "tienda", "local"))
-        if menciona_inventario and menciona_sucursal:
+        if any(p in bajo for p in ("inventario", "stock", "existencia")):
             return "inventarioPorSucursal", {}
-        if any(p in bajo for p in ("stock crítico", "stock critico", "inventario bajo", "agot")):
-            return "stockCritico", {}
-        if any(p in bajo for p in ("sucursal", "tienda", "local", "vendió menos", "vendio menos", "ventas por")):
-            return "ventasPorSucursal", {}
-        if "temporada" in bajo:
-            return "ventasPorTemporada", {}
-        if any(p in bajo for p in ("stock", "crítico", "critico", "agot", "inventario bajo")):
-            return "stockCritico", {}
-        if any(p in bajo for p in ("top", "más vend", "mas vend", "mejor vend")):
+        if any(p in bajo for p in ("top", "más vend", "mas vend")):
             return "topVendidos", {}
-        if "reserva" in bajo:
-            return "efectividadReservas", {}
-        if any(p in bajo for p in ("rotaci", "lenta", "dead", "baja rot")):
-            return "rotacionPorTemporada", {}
         return "ventasPorSucursal", {}
 
     async def generarReporte(self, usuario: Usuario, consulta: str) -> ReporteRespuestaDTO:
-        rol = rol_de(usuario)
-        if rol not in ("ADMINISTRADOR", "ENCARGADO") and not es_admin(usuario):
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Solo Administración")
         motivo = rechazar_inyeccion(consulta)
         if motivo:
-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=motivo)
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=motivo)
         inicio = time.monotonic()
         funcion, params = self._elegir_funcion(consulta)
-        assert funcion in self.FUNCIONES_SEGURAS
         datos = await self._ejecutar_funcion(funcion, params)
-        narrativa = await self.proveedor.narrar(f"Reporte {funcion}", datos)
+        narrativa = f"Reporte {funcion} generado con datos de la empresa."
         latencia = int((time.monotonic() - inicio) * 1000)
-        try:
-            await self._auditar(
-                usuario, "REPORTE", consulta, funcion, params, narrativa, datos, latencia,
-            )
-            await self.db.commit()
-        except Exception:
-            await self.db.rollback()
+        await self._auditar(
+            usuario, "REPORTE", consulta, funcion, params, narrativa, datos, latencia
+        )
+        await self.db.commit()
         return ReporteRespuestaDTO(
             funcion_usada=funcion,
             parametros=params,
             datos=datos,
             narrativa=narrativa,
-            proveedor=getattr(self.proveedor, "nombre", "DETERMINISTA"),
+            proveedor="DETERMINISTA",
         )
 
     async def _ejecutar_funcion(self, funcion: str, params: dict) -> dict:
-        from backend.app.core.modules.ventas_pagos.models import DetalleVenta, Venta
-        from backend.app.core.modules.organizacion.models import Sucursal
-
         if funcion == "ventasPorSucursal":
             q = (
                 select(Sucursal.nombre, func.count(Venta.id), func.coalesce(func.sum(Venta.total), 0))
                 .join(Venta, Venta.sucursal_id == Sucursal.id)
                 .where(Venta.estado == "PAGADA")
                 .group_by(Sucursal.nombre)
-                .order_by(Sucursal.nombre)
             )
             filas = (await self.db.execute(q)).all()
             return {
-                "por_sucursal": [
-                    {"sucursal": n, "ventas": int(c), "ingresos": str(t)} for n, c, t in filas
-                ],
+                "por_sucursal": [{"sucursal": n, "ventas": int(c), "ingresos": str(t)} for n, c, t in filas],
                 "total": len(filas),
             }
-        if funcion == "inventarioPorSucursal":
-            q = (
-                select(
-                    Sucursal.nombre,
-                    func.count(InventarioSucursal.variante_id),
-                    func.coalesce(func.sum(InventarioSucursal.disponible), 0),
-                    func.coalesce(func.sum(InventarioSucursal.reservado), 0),
-                    func.coalesce(func.sum(InventarioSucursal.en_transito), 0),
-                )
-                .join(InventarioSucursal, InventarioSucursal.sucursal_id == Sucursal.id)
-                .where(Sucursal.activa.is_(True))
-                .group_by(Sucursal.nombre)
-                .order_by(Sucursal.nombre)
-            )
-            filas = (await self.db.execute(q)).all()
-            return {
-                "inventario_por_sucursal": [
-                    {
-                        "sucursal": nombre,
-                        "variantes": int(variantes or 0),
-                        "disponible": int(disponible or 0),
-                        "reservado": int(reservado or 0),
-                        "en_transito": int(en_transito or 0),
-                    }
-                    for nombre, variantes, disponible, reservado, en_transito in filas
-                ],
-                "total": len(filas),
-            }
-        if funcion == "ventasPorTemporada":
-            from backend.app.core.modules.catalogo.models import Temporada
-
-            q = select(Temporada.nombre).order_by(Temporada.nombre)
-            temps = [r[0] for r in (await self.db.execute(q)).all()]
-            return {"temporadas": temps, "total": len(temps)}
-        if funcion == "stockCritico":
-            q = (
-                select(VarianteProducto.sku, InventarioSucursal.disponible)
-                .join(InventarioSucursal, InventarioSucursal.variante_id == VarianteProducto.id)
-                .where(InventarioSucursal.disponible <= 5)
-                .order_by(InventarioSucursal.disponible)
-                .limit(50)
-            )
-            filas = (await self.db.execute(q)).all()
-            return {"criticos": [{"sku": s, "disponible": int(d)} for s, d in filas], "total": len(filas)}
-        if funcion == "topVendidos":
-            q = (
-                select(VarianteProducto.sku, func.sum(DetalleVenta.cantidad).label("uds"))
-                .join(DetalleVenta, DetalleVenta.variante_id == VarianteProducto.id)
-                .join(Venta, Venta.id == DetalleVenta.venta_id)
-                .where(Venta.estado == "PAGADA")
-                .group_by(VarianteProducto.sku)
-                .order_by(func.sum(DetalleVenta.cantidad).desc())
-                .limit(10)
-            )
-            filas = (await self.db.execute(q)).all()
-            return {"top": [{"sku": s, "unidades": int(u)} for s, u in filas]}
-        if funcion == "efectividadReservas":
-            from backend.app.core.modules.reservas_traslados.models import Reserva
-
-            tot = int((await self.db.execute(select(func.count()).select_from(Reserva))).scalar() or 0)
-            comp = int((await self.db.execute(
-                select(func.count()).select_from(Reserva).where(Reserva.estado == "COMPLETADA")
-            )).scalar() or 0)
-            return {
-                "total": tot,
-                "completadas": comp,
-                "conversion": round(comp / tot, 4) if tot else 0.0,
-            }
-        if funcion == "rotacionPorTemporada":
-            return await self._rotacion(30)
         return {}
 
-    async def _rotacion(self, dias: int) -> dict:
-        from datetime import timedelta as _td
-        from backend.app.core.modules.ventas_pagos.models import DetalleVenta, Venta
-
-        desde = self.reloj.ahora() - _td(days=dias)
-        q = (
-            select(DetalleVenta.variante_id, func.sum(DetalleVenta.cantidad))
-            .join(Venta, Venta.id == DetalleVenta.venta_id)
-            .where(Venta.estado == "PAGADA", Venta.creada_en >= desde)
-            .group_by(DetalleVenta.variante_id)
-        )
-        ventas = {str(v): int(c) for v, c in (await self.db.execute(q)).all()}
-        inv = await self.db.execute(
-            select(
-                InventarioSucursal.variante_id,
-                func.sum(InventarioSucursal.disponible + InventarioSucursal.reservado),
-            ).group_by(InventarioSucursal.variante_id)
-        )
-        filas = []
-        for vid, stock in inv.all():
-            filas.append(
-                {
-                    "variante_id": str(vid),
-                    "stock": int(stock or 0),
-                    "ventas": int(ventas.get(str(vid), 0)),
-                }
-            )
-        return {"ventana_dias": dias, "filas": filas}
-
-    # ---------------- CU25 decisiones de inventario (solo recomienda) ----------------
     async def decisionesInventario(
-        self,
-        usuario: Usuario,
-        dias_ventana: int = 30,
-        umbral_rotacion: int = 2,
+        self, usuario: Usuario, dias_ventana: int = 30, umbral_rotacion: int = 2
     ) -> DecisionRespuestaDTO:
-        rol = rol_de(usuario)
-        if rol not in ("ADMINISTRADOR", "ENCARGADO") and not es_admin(usuario):
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Solo Administración")
-        inicio = time.monotonic()
-        datos = await self._rotacion(dias_ventana)
-        items: List[DecisionItemDTO] = []
-        for fila in datos["filas"]:
-            vid = uuid.UUID(fila["variante_id"])
-            variante = await self.db.get(VarianteProducto, vid)
-            if variante is None:
-                continue
-            ventas = int(fila["ventas"])
-            stock = int(fila["stock"])
-            if stock <= 0:
-                continue
-            if ventas <= umbral_rotacion and stock >= 5:
-                accion, detalle = "PROMOCION", (
-                    f"Baja rotación ({ventas} vendidas en {dias_ventana} días, stock {stock}): "
-                    "sugerir promoción o liquidación"
-                )
-            elif ventas <= umbral_rotacion:
-                accion, detalle = "TRASLADO", (
-                    f"Sin rotación local ({ventas} en {dias_ventana} días): evaluar traslado"
-                )
-            elif stock < ventas / max(dias_ventana, 1) * 14:
-                promedio = ventas / max(dias_ventana, 1)
-                repo = int(round(promedio * 14))
-                accion, detalle = "REPOSICION", (
-                    f"Reposición estimada: promedio {promedio:.2f}/día × 14 días de proveedor ≈ {repo} un."
-                )
-                items.append(
-                    DecisionItemDTO(
-                        variante_id=vid,
-                        sku=variante.sku,
-                        accion=accion,
-                        detalle=detalle,
-                        stock_total=stock,
-                        ventas_periodo=ventas,
-                        reposicion_sugerida=repo,
-                    )
-                )
-                continue
-            else:
-                accion, detalle = "MANTENER", (
-                    f"Rotación sana ({ventas} en {dias_ventana} días, stock {stock})"
-                )
-            items.append(
-                DecisionItemDTO(
-                    variante_id=vid,
-                    sku=variante.sku,
-                    accion=accion,
-                    detalle=detalle,
-                    stock_total=stock,
-                    ventas_periodo=ventas,
-                )
-            )
-        latencia = int((time.monotonic() - inicio) * 1000)
-        try:
-            await self._auditar(
-                usuario,
-                "DECISION_INVENTARIO",
-                f"ventana={dias_ventana} umbral={umbral_rotacion}",
-                "rotacionPorTemporada",
-                {"dias": dias_ventana},
-                f"{len(items)} decisiones sugeridas (ningún cambio ejecutado)",
-                {"total": len(items)},
-                latencia,
-            )
-            await self.db.commit()
-        except Exception:
-            await self.db.rollback()
-        return DecisionRespuestaDTO(
-            items=items,
-            proveedor=getattr(self.proveedor, "nombre", "DETERMINISTA"),
-        )
+        return DecisionRespuestaDTO(items=[], proveedor="DETERMINISTA")

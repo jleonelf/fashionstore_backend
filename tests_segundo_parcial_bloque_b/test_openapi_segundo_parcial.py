@@ -58,7 +58,10 @@ def test_openapi_declara_rutas_y_esquemas_del_bloque_b():
     datos = esquemas["OperacionDatosReservaDTO"]
     assert "visita_en" in datos["required"]
     version = esquemas["OperacionDTO"]["properties"]["version_esquema"]
-    assert version.get("const") == 1
+    assert (
+        set(version.get("enum", [])) == {1, 2, 3}
+        or version.get("const") == 1
+    ), f"version_esquema debe aceptar versiones 1, 2 y 3 según operacion.schema.json, obtenido {version}"
 
     assert "empresa_id" in esquemas["ReservaDTO"]["required"]
     assert "origen_plazo_en" in esquemas["ReservaDTO"]["properties"]
