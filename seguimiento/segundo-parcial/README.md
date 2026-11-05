@@ -16,6 +16,10 @@ La carpeta vive en el repositorio `backend` para que su historial pueda registra
 8. [Resolución técnica final de bloqueos E1](13-resolucion-final-bloqueos-e1.md): migraciones 0012–0013, conciliación supervisada, Kardex y estado de pruebas.
 9. [Entrega técnica E1 y plan E2](14-entrega-e1-y-plan-e2.md): commits reales, verificación final, límites manuales y orden de los 13 CU restantes. Es el estado vigente cuando difiere de auditorías previas.
 10. [Ejecución E2 con subagentes](15-ejecucion-e2.md) y [prompt integral listo para el agente](prompts/E2-implementacion-integral-subagentes.md): alcance, ramas, propietarios de archivos, puertas técnicas y reporte.
+11. [Auditoría independiente E2](18-auditoria-independiente-e2.md): estado vigente tras el checkpoint del agente 17, pruebas repetidas y bloqueos funcionales. Prevalece sobre declaraciones de cierre anteriores.
+12. [Prompt de correcciones E2 con subagentes](prompts/E2-correcciones-auditoria-18-subagentes.md): instrucciones para resolver los bloqueos de la auditoría 18 y preparar una nueva revisión.
+13. [Auditoría independiente tras checkpoint 19](20-auditoria-independiente-post-checkpoint-19.md): estado vigente al 05/11/2026, pruebas repetidas y bloqueos restantes. Prevalece sobre el checkpoint 19 y la auditoría 18 para el cierre E2.
+14. [Plan de mejora y cierre E2](21-plan-mejora-y-cierre-e2.md): orden C1–C5, dependencias y puertas de aceptación tras los commits WIP autorizados.
 
 ## Fuentes y prioridad
 

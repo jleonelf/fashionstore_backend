@@ -54,3 +54,15 @@ La instrucción previa «sin commit» describía entregas anteriores del agente;
 ## Rama integral E2 y revisión de grupos
 
 El propietario solicitó implementar toda E2 con subagentes. Para este encargo se propone `feature/sp2-e2-integral` en cada repositorio afectado, desde los HEAD E1, en lugar de ramas simultáneas por lote dependiente. Los grupos B1/B2/B3/B4/M se separan por checkpoints y, tras revisión de Codex, por commits coherentes de avance. El agente implementador y sus subagentes no hacen commits. La autorización para comenzar E2 no equivale a aceptación manual de E1 ni a permiso de push/merge/despliegue. Ver [ejecución E2](15-ejecucion-e2.md).
+
+## Checkpoint WIP E2 autorizado — 05/11/2026
+
+El propietario pidió registrar el estado actual después de la [auditoría 20](20-auditoria-independiente-post-checkpoint-19.md). Estos commits preservan código **observado**, con bloqueos P0/P1 abiertos. No equivalen a avance verificado por CU ni a aceptación. No hubo push, merge ni despliegue.
+
+| Repositorio | Rama | Commit de código | Estado |
+|---|---|---|---|
+| `backend` | `feature/sp2-e2-integral` | `d548b94` | Código, pruebas y OpenAPI E2; pagos/compra/caja observados. |
+| `frontend-web` | `feature/sp2-e2-integral` | `9992cdc` | PWA, caja, analítica y posventa; integración v3 observada. |
+| `app-movil` | `feature/sp2-e2-integral` | `7880a15` | Checkout/posventa; compra offline automática v3 pendiente. |
+
+El commit backend posterior registra auditoría, estado y [plan C1–C5](21-plan-mejora-y-cierre-e2.md). Consultar `git log -1` para su SHA. El próximo commit de código debe corresponder a un grupo corregido y revisado.
