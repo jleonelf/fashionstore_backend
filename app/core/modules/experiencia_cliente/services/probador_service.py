@@ -62,18 +62,29 @@ class ProbadorService:
         self.variante_repo = VarianteRepository(db)
         self.navegacion_repo = NavegacionRepository(db)
 
-    async def _variante_compatible(self, variante_id: uuid.UUID):
+    async def _variante_compatible(self, variante_id: uuid.UUID, empresa_id: uuid.UUID):
         from sqlalchemy import select
         from sqlalchemy.orm import selectinload
         from backend.app.core.modules.catalogo.models import Producto, VarianteProducto
 
+        if empresa_id is None:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="El cliente no tiene una empresa asignada",
+            )
+
         q = (
             select(VarianteProducto)
+            .join(VarianteProducto.producto)
             .options(
                 selectinload(VarianteProducto.producto).selectinload(Producto.categoria),
                 selectinload(VarianteProducto.producto).selectinload(Producto.imagenes),
             )
-            .where(VarianteProducto.id == variante_id)
+            .where(
+                VarianteProducto.id == variante_id,
+                VarianteProducto.empresa_id == empresa_id,
+                Producto.empresa_id == empresa_id,
+            )
         )
         variante = (await self.db.execute(q)).scalars().first()
         if variante is None:
@@ -109,7 +120,7 @@ class ProbadorService:
     async def recursoPrueba(self, usuario: Usuario, variante_id: uuid.UUID) -> PruebaVirtualDTO:
         if rol_de(usuario) != "CLIENTE":
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Solo el Cliente usa el probador")
-        variante, _, recurso = await self._variante_compatible(variante_id)
+        variante, _, recurso = await self._variante_compatible(variante_id, usuario.empresa_id)
         return PruebaVirtualDTO(
             variante_id=variante.id, compatible=True,
             imagen_prenda_url=recurso, prompt_prenda=PROMPT_PRENDA,
@@ -151,7 +162,7 @@ class ProbadorService:
                     return dto_previo, False
                 await self.db.delete(previo)
                 await self.db.flush()
-            variante, _, recurso = await self._variante_compatible(dto.variante_id)
+            variante, _, recurso = await self._variante_compatible(dto.variante_id, usuario.empresa_id)
             if not settings.DECART_ENABLED or not settings.DECART_API_KEY:
                 raise decart_client.autorizacion_no_disponible()
             try:
@@ -184,6 +195,7 @@ class ProbadorService:
             )
             self.db.add(
                 HistorialNavegacion(
+                    empresa_id=usuario.empresa_id,
                     cliente_id=usuario.id, usuario_id=usuario.id,
                     variante_id=variante.id, producto_id=variante.producto_id,
                     evento="PRUEBA_VIRTUAL",

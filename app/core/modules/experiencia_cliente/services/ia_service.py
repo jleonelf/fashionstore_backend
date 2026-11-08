@@ -14,7 +14,7 @@ from backend.app.core.integraciones.ia_proveedor import FiltrosBusqueda, proveed
 from backend.app.core.permisos import es_admin, rol_de
 from backend.app.core.reloj import RelojSistema
 from backend.app.core.modules.catalogo.models import Producto, VarianteProducto
-from backend.app.core.modules.experiencia_cliente.models import SolicitudIA
+from backend.app.core.modules.experiencia_cliente.models import HistorialNavegacion, SolicitudIA
 from backend.app.core.modules.inventario.models import InventarioSucursal
 from backend.app.core.modules.identidad_empresas.models import Usuario
 from backend.app.core.modules.experiencia_cliente.repositories.navegacion_repository import NavegacionRepository
@@ -272,6 +272,7 @@ class IAService:
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="Evento no permitido")
         try:
             self.db.add(HistorialNavegacion(
+                empresa_id=usuario.empresa_id,
                 cliente_id=usuario.id if rol_de(usuario) == "CLIENTE" else None,
                 usuario_id=usuario.id, variante_id=variante_id, producto_id=producto_id,
                 evento=evento, metadatos={},

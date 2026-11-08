@@ -50,6 +50,23 @@ async def test_recurso_prueba_virtual_y_reglas(cliente_http: AsyncClient):
             f"/api/v1/variantes/{uuid.uuid4()}/prueba-virtual")).status_code == 404
 
 
+async def test_variante_probador_no_se_comparte_entre_empresas(cliente_http: AsyncClient):
+    """La cuenta Decart es global, pero el recurso sigue aislado por empresa."""
+    from backend.app.core.database import AsyncSessionLocal
+    from backend.app.core.modules.experiencia_cliente.services.probador_service import ProbadorService
+    from fastapi import HTTPException
+
+    suc = await sucursal_semilla(cliente_http)
+    var = await crear_variante_probador(cliente_http, suc, 0, tag="tenant")
+    async with AsyncSessionLocal() as db:
+        # Simula una sesión cliente de otro tenant sin crear datos ni persistir cambios.
+        with pytest.raises(HTTPException) as error:
+            await ProbadorService(db)._variante_compatible(
+                uuid.UUID(var["variante_id"]), uuid.uuid4()
+            )
+    assert error.value.status_code == 404
+
+
 async def test_autorizacion_token_modelo_ttl_duracion_e_idempotencia(
     cliente_http: AsyncClient, _limpio,
 ):

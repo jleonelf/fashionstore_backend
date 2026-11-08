@@ -36,7 +36,7 @@ Este informe reemplaza los resultados intermedios anteriores de esta auditoría.
 | Compra diferida sin conexión y confirmación posterior | **No probado físicamente** | Falta recorrer en el teléfono el estado pendiente, recuperación de red, reintento automático, confirmación del backend y notificación push de compra exitosa. |
 | Solicitud de devolución/cambio desde cliente | **No probada de extremo a extremo** | Las rutas/modelos móviles y la lógica backend se alinearon; falta una compra pagada/entregada de prueba para recorrer el ciclo completo y observar el saldo/reembolso. |
 | Reserva offline y sincronización | **No probada en teléfono** | Hay pruebas automatizadas del detalle/cola offline, pero no se completó el recorrido físico de crear offline y sincronizar después. |
-| Probador CU17 | **No probado** | No se llegó al SDK realtime. Falta contenido compatible y la arquitectura requerida `docu_general/ciclo-3/07-arquitectura-probador-decart.md` no está en el repositorio. El `AGENTS.md` prohíbe modificar CU17 en backend o Flutter sin ese documento; queda como bloqueo documental y de configuración Decart.
+| Probador CU17 | **Flujo principal verificado por el usuario** | El usuario confirmó que el stream de video realtime funciona y Decart muestra la prenda sobre él. Un intento anterior registrado por ADB falló durante la señalización; queda como incidencia transitoria, no como estado final. |
 
 Las operaciones de Caja se ejecutaron únicamente en `fashionstore_manual_test`. No se tocaron inventarios, ventas ni turnos de la base oficial.
 
@@ -64,7 +64,7 @@ La suite aislada `tests_segundo_parcial_bloque_b/` se ejecutó en `fashionstore_
 3. Ejecutar compra diferida sin conexión, recuperación de conectividad y sincronización automática hasta recibir push.
 4. Crear una compra pagada y entregada, pedir una devolución desde Flutter y revisar inspección, saldo y reembolso.
 5. Ejecutar reserva offline y sincronizarla físicamente.
-6. Para CU17, incorporar primero la arquitectura Decart faltante; después configurar credenciales y validar con Android físico.
+6. Para CU17, conservar evidencia del reintento exitoso y verificar cambio de prenda y liberación de cámara al terminar la sesión.
 7. Clasificar y corregir el conjunto de fallos de backend; hasta entonces la verificación global del proyecto no está cerrada.
 
 ## Actualización backend del 8 de noviembre de 2026
@@ -74,3 +74,56 @@ La suite aislada `tests_segundo_parcial_bloque_b/` se ejecutó en `fashionstore_
 - La suite aislada del segundo parcial terminó con **290 aprobadas** y 3 advertencias en `fashionstore_test`.
 - La suite principal terminó con **165 aprobadas y 11 fallidas** antes de la corrección del test de concurrencia Stripe. Ese test reutilizaba un ID de evento para seis pagos, se corrigió y pasó de forma aislada. La suite global no se repitió después de esa corrección; permanecen 10 fallos observados en la corrida global, principalmente CU17/Decart, identidad, IA y un caso de entregas sensible al orden.
 - La solicitud de checkout actual de Flutter aún incluye `canal` en el cuerpo, por lo que entra en la rama legada. Para usar la compra durable desde móvil deberá actualizarse el cliente Flutter y probarse el pago de extremo a extremo en el teléfono. Este commit modifica únicamente el repositorio backend.
+
+## Prueba CU17 / Decart - 8 de noviembre de 2026
+
+### Alcance y configuracion
+
+- FashionStore usa una **cuenta y API key global de Decart para todos los tenants**. La clave vive solo en el backend; no se configura por empresa ni se incluye en Flutter. Catalogo e imagen de referencia se resuelven dentro del `empresa_id` del usuario.
+- Se documento el flujo, privacidad, alcance multitenant y criterios de prueba completa en `seguimiento/segundo-parcial/52-arquitectura-probador-decart.md` dentro del repositorio backend; la ruta exigida por AGENTS tambien esta en `docu_general/ciclo-3/07-arquitectura-probador-decart.md`.
+- Para preparar el ensayo se anadio un cliente de prueba y una prenda superior con imagen HTTPS en la base local `fashionstore_manual_test`. No se modifico la base oficial.
+
+### Resultado observado
+
+- **Catalogo y acceso:** comprobados en la APK conectada al backend local; tras reiniciar FashionStore, el telefono cargo la imagen de camisa de Cloudinary en el detalle y en la pantalla de consentimiento CU17. La imagen paso el validador real (HTTPS, host permitido, WebP valido y resolucion minima). El host `res.cloudinary.com` ya estaba permitido; no se cambio el allowlist.
+- **Aislamiento multitenant:** el recurso de probador de una variante de otra empresa respondio 404 para el cliente FashionStore.
+- **Backend automatizado:** `backend/tests/test_cu17_decart.py` paso con **6 pruebas aprobadas**.
+- **Compatibilidad multitenant del recurso:** `GET /api/v1/variantes/{id}/prueba-virtual` respondio **200** y `compatible=true` para el cliente y la prenda del tenant FashionStore; la URL resuelta uso `res.cloudinary.com`. El filtro de empresa no bloqueo el flujo.
+- **Token Decart real:** no emitido. `POST /api/v1/probador/autorizaciones` respondio **502 `DECART_RECHAZO`** y Flutter mostro `ERROR_GENERICO`; el intento directo anterior al proveedor habia devuelto **HTTP 401**. La API key configurada no es aceptada por Decart y debe reemplazarse/rotarse antes de repetir.
+- **Video y frames:** **no verificados**. No se obtuvo conexion realtime, video publicado ni frame remoto transformado; CU17 no se declara funcional de extremo a extremo. Tras volver a la pantalla de consentimiento, `dumpsys media.camera` no mostro un cliente activo de `com.example.fashionstore_movil`.
+
+### Para repetir y cerrar CU17
+
+1. Regenerar o corregir la API key en Decart y reemplazar `DECART_API_KEY` localmente (o el secreto de Render para produccion). La credencial usada en esta auditoria debe rotarse por seguridad. No enviar la clave por chat ni guardarla en Git.
+2. Reiniciar FastAPI y comprobar que `POST /api/v1/probador/autorizaciones` devuelve 201 con token temporal sin exponerlo en logs.
+3. Con el Xiaomi conectado, iniciar CU17, aceptar consentimiento, comprobar preview local, conexion del SDK, video remoto y al menos un frame transformado visible.
+4. Cambiar de prenda y salir; confirmar que se detienen stream/camara y que no quedan datos audiovisuales persistidos.
+
+**Conclusion:** arquitectura, validacion de tenant y pruebas unitarias listas; falta una credencial Decart aceptada y la prueba fisica realtime para concluir CU17.
+
+## Reintento tras actualizar credenciales Decart - 8 de noviembre de 2026
+
+> Este resultado posterior reemplaza el estado de rechazo de credenciales descrito en los dos apartados anteriores.
+
+- La base URL local quedó en el origen raíz `https://api.decart.ai`, porque el cliente oficial compone la ruta de emisión de tokens. La captura del usuario corresponde a `/v1/jobs/lucy-2.5` (trabajo de video no realtime), no a la ruta de señalización de CU17.
+- Con la clave actualizada, FashionStore inició sesión contra FastAPI local (**200**), consultó el recurso compatible (**200**) y creó una autorización Decart (**201**). El token temporal no se mostró ni guardó en el informe; la app indicó una vigencia aproximada de 59 segundos.
+- El catálogo de la primera apertura seguía mostrando una copia SQLite anterior. Al reiniciar la app y volver a cargar desde la API, la imagen Cloudinary apareció en el catálogo, detalle y consentimiento; el botón de CU17 se habilitó.
+- El consentimiento se aceptó y Android abrió la cámara local. Al iniciar la señalización realtime, Logcat reportó: `Fields [server_ip, server_port] are required for type ... SessionIdMessage, but they were missing`. Flutter mostró `WEBRTC_SIGNALING_ERROR` (código de interfaz `ERROR_RED`) y el WebSocket cerró con `wasConnected=false`. No se completó la señalización; la evidencia no demuestra rechazo de la API key ni permite atribuir con certeza la causa al SDK o al servicio.
+- **Video y frames remotos:** no recibidos. Solo se comprobó la cámara/vista local; no se mostró prenda transformada ni se confirmó un frame remoto.
+- Al salir del probador, `dumpsys media.camera` confirmó `Active Camera Clients: []`; el SDK cerró el WebSocket con `wasConnected=false`.
+- Durante el intento, el registro accesorio de navegación falló con `NameError` por import faltante y ausencia de `empresa_id`. Se corrigió el import de `HistorialNavegacion`, se asigna el tenant del usuario y `tests/test_ia_navegacion.py` pasó (**1 aprobada**).
+- La documentación actual de Decart sigue publicando Android SDK `0.7.10`, autenticación con token efímero y `baseUrl` WebSocket `wss://api.decart.ai`; la integración local usa esos valores. La documentación describe el stream realtime por WebSocket/LiveKit separado del procesamiento por cola.
+
+### Confirmación posterior del usuario
+
+- Después del intento fallido capturado arriba, el usuario informó que el stream de video realtime sí funcionó y que Decart le colocó la prenda.
+- Esta confirmación posterior establece el resultado funcional del flujo principal. El error `SessionIdMessage` se conserva como diagnóstico de un intento previo; no representa el estado final confirmado.
+- La sesión exitosa no quedó capturada por ADB/Logcat en nuestra prueba. Para completar evidencia reproducible, queda documentar un cambio de prenda y confirmar el cierre/liberación de cámara al salir de esa sesión.
+
+**Estado vigente:** CU17 funciona en su flujo principal según la prueba manual confirmada por el usuario: video en vivo y prenda aplicada. Solo queda completar evidencia de cambio de prenda y cierre limpio; la clave y el endpoint de tokens ya no son bloqueos.
+
+## Revision de la URL de referencia Decart - 8 de noviembre de 2026
+
+- La captura compartida muestra `POST https://api.decart.ai/v1/jobs/lucy-2.5`, con un cuerpo multipart `data`. Es el endpoint de trabajos de video; no debe configurarse como `DECART_API_BASE_URL` para el probador realtime.
+- CU17 usa el flujo realtime: el backend crea un token temporal y Flutter conecta con el SDK Android. Referencias oficiales: [Client Tokens](https://docs.platform.decart.ai/getting-started/client-tokens) y [SDK Direct](https://docs.platform.decart.ai/integrations/sdk-direct).
+- En la revisión inicial, la ruta incluida en `.env` causaba un 404 al duplicar el endpoint. Se corrigió al origen raíz. El resultado de autenticación anterior quedó superado: con la clave actualizada se obtuvo 201 para el token; el fallo pendiente actual es el mensaje de señalización descrito en “Reintento tras actualizar credenciales Decart”. No usar `/v1/jobs/lucy-2.5` como base URL realtime.
