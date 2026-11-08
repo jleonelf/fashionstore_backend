@@ -8,7 +8,7 @@ Mapeo de las tablas en PostgreSQL (0009_modelo_final_66):
 import uuid
 from datetime import datetime, timezone
 from decimal import Decimal
-from typing import Optional
+from typing import List, Optional
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import (
     BigInteger,
@@ -107,6 +107,10 @@ class MetodoPrepararDTO(BaseModel):
     huella_dispositivo: Optional[str] = Field(None, description="Huella o identificador de dispositivo del cliente")
 
 
+class MetodoConfirmarDTO(BaseModel):
+    payment_method_id: Optional[str] = Field(None, description="ID de PaymentMethod retornado por Stripe tras confirmación en cliente")
+
+
 class MetodoPreparadoDTO(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     preparacion_pago_id: uuid.UUID
@@ -139,13 +143,47 @@ class ContinuarAccionDTO(BaseModel):
     payment_intent_id: Optional[str] = Field(None, description="PaymentIntent ID confirmado por cliente en 3DS")
 
 
+class LineaRecuperadaCajaDTO(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    variante_id: uuid.UUID
+    cantidad: int
+    precio_unitario_bob: Decimal
+    descuento_bob: Decimal = Decimal("0.00")
+    sku: Optional[str] = None
+    nombre_producto: Optional[str] = None
+
+
+class OrdenActivaCajaDTO(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    orden_pago_id: uuid.UUID
+    venta_id: uuid.UUID
+    stripe_payment_intent_id: Optional[str] = None
+    client_secret: Optional[str] = None
+    monto_bob: Decimal
+    monto_usd: Optional[Decimal] = None
+    centavos_usd: Optional[int] = None
+    tasa_bob_por_usd: Optional[Decimal] = None
+    estado_orden: str
+    estado: Optional[str] = None  # Compatibilidad hacia atrás con inspectores de prueba previos
+    sucursal_id: uuid.UUID
+    turno_caja_id: Optional[uuid.UUID] = None
+    cliente_id: Optional[uuid.UUID] = None
+    procedencia: str = "PRESENCIAL"  # "TURNO_OFFLINE" | "PRESENCIAL"
+    lineas: List[LineaRecuperadaCajaDTO] = Field(default_factory=list)
+    estado_verificacion: str = "VERIFICADO"  # "VERIFICADO" | "NO_VERIFICADO_ERROR_PASARELA" | "PROVISIONAL_PENDIENTE_INTENTO"
+    provisional: Optional[bool] = False
+
+
 __all__ = [
     "MetodoPreparado",
     "OrdenPago",
     "EventoProveedor",
     "MetodoPrepararDTO",
+    "MetodoConfirmarDTO",
     "MetodoPreparadoDTO",
     "OrdenPagoCrearDTO",
     "OrdenPagoDTO",
     "ContinuarAccionDTO",
+    "LineaRecuperadaCajaDTO",
+    "OrdenActivaCajaDTO",
 ]

@@ -7,6 +7,7 @@ async def test_registro_cliente_exitoso(cliente_http: AsyncClient):
     uid = uuid.uuid4().hex[:8]
     correo = f"carlos.{uid}@example.com"
     payload = {
+        "empresa_codigo": "fashionstore",
         "nombres": "Carlos",
         "apellidos": "Santistevan",
         "correo_electronico": correo,
@@ -34,6 +35,7 @@ async def test_registro_cliente_correo_duplicado_rechazado(cliente_http: AsyncCl
     uid = uuid.uuid4().hex[:8]
     correo = f"mariana.{uid}@example.com"
     payload = {
+        "empresa_codigo": "fashionstore",
         "nombres": "Mariana",
         "apellidos": "Vargas",
         "correo_electronico": correo,
@@ -55,6 +57,7 @@ async def test_inicio_sesion_exitoso_y_fallido(cliente_http: AsyncClient):
     uid = uuid.uuid4().hex[:8]
     correo = f"lucia.{uid}@example.com"
     payload_reg = {
+        "empresa_codigo": "fashionstore",
         "nombres": "Lucía",
         "apellidos": "Mendez",
         "correo_electronico": correo,

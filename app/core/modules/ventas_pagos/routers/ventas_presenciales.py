@@ -1,6 +1,7 @@
 """Router Ventas Presenciales en Caja — CU19.
 
-Ruta:
+Rutas:
+- POST /ventas/presenciales/iniciar-stripe
 - POST /ventas/presenciales/liquidar
 """
 import uuid
@@ -15,11 +16,35 @@ from backend.app.core.idempotencia import validar_clave_idempotencia
 from backend.app.core.modules.identidad_empresas.models import Usuario
 from backend.app.core.modules.ventas_pagos.services.venta_presencial_service import (
     VentaLiquidadaDTO,
+    VentaPresencialIniciarStripeDTO,
     VentaPresencialLiquidarDTO,
     VentaPresencialService,
+    VentaPresencialStripeIniciadaDTO,
 )
 
 router = APIRouter()
+
+
+@router.post(
+    "/iniciar-stripe",
+    response_model=VentaPresencialStripeIniciadaDTO,
+    status_code=status.HTTP_201_CREATED,
+    summary="Iniciar venta presencial con Stripe (CU19)",
+    description=(
+        "Cajero o Administrador. Valida stock libre disponible, calcula precios/promociones oficiales en servidor, "
+        "persiste la Venta en PENDIENTE_PAGO con líneas y total congelados, y crea OrdenPago(contexto='VENTA') "
+        "emitiendo PaymentIntent en Stripe. Requiere header Idempotency-Key."
+    ),
+)
+async def iniciar_venta_presencial_stripe(
+    datos: VentaPresencialIniciarStripeDTO,
+    clave_idempotencia: Optional[str] = Header(None, alias="Idempotency-Key"),
+    db: AsyncSession = Depends(get_db),
+    usuario: Usuario = Depends(get_usuario_actual),
+) -> VentaPresencialStripeIniciadaDTO:
+    clave = validar_clave_idempotencia(clave_idempotencia)
+    servicio = VentaPresencialService(db)
+    return await servicio.iniciar_stripe(usuario, datos, clave)
 
 
 @router.post(

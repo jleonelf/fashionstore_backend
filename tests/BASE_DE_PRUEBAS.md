@@ -55,9 +55,10 @@ El script (con protección `_test`) hace, en orden:
 6. Verificación del índice `uq_movimientos_efecto_logico` con el DDL exacto
    de la migración (repara re-ejecuciones donde alembic ya está en head).
 7. Resto del esquema desde los modelos (`checkfirst`).
-8. Semilla mínima: roles, ciudad, una sucursal, admin de pruebas y maestros
-   mínimos de catálogo (talla, color, categoría, proveedor). La suite crea y
-   limpia todo lo demás por prueba.
+8. Semilla mínima del tenant heredado `fashionstore`: roles empresariales y
+   `SUPERADMIN`, ciudad, sucursal, admin de pruebas y maestros de catálogo
+   (talla, color, categoría, proveedor). Si no hay tasa vigente, añade una
+   tasa BOB/USD de prueba. La suite crea y limpia el resto de sus datos.
 
 El script es idempotente: puede repetirse sin duplicar la semilla.
 

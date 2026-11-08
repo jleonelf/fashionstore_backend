@@ -22,6 +22,7 @@ import asyncio
 import os
 import sys
 import uuid
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -115,6 +116,7 @@ ESQUEMAS = (
     "inventario",
     "comercial",
     "inteligencia",
+    "plataforma",
 )
 
 
@@ -175,6 +177,20 @@ TABLAS_CICLO3 = frozenset(
         "historial_navegacion",
         "solicitudes_ia",
         "registros_idempotencia",
+    }
+)
+# Estas tablas las crea una migracion posterior a 0005 con CREATE TABLE sin
+# IF NOT EXISTS. Excluirlas del create_all inicial evita que la preparacion
+# de una base vacia colisione al correr alembic upgrade head.
+TABLAS_MIGRACIONES_POST_0005 = frozenset(
+    {
+        "empresas",
+        "planes",
+        "suscripciones",
+        "referencias_horarias",
+        "operaciones_sincronizacion",
+        "color_componentes",
+        "turnos_caja_eventos",
     }
 )
 
@@ -262,26 +278,19 @@ async def verificar_indice_efecto_logico() -> None:
 
 
 async def aplicar_esquema_ciclo1() -> None:
-    """Crea las tablas previas al Ciclo 2 (la migración 0001 las asume)."""
-    from sqlalchemy.ext.asyncio import create_async_engine
+    """Aplica el baseline versionado que las migraciones 0001..0005 asumen."""
+    import asyncpg
 
-    from backend.app.core.config import settings
-    from backend.app.core.database import Base
-    import backend.app.db.modelos  # noqa: F401  registra metadata completa
-
-    tablas = [
-        t
-        for nombre, t in Base.metadata.tables.items()
-        if nombre.rsplit(".", 1)[-1] not in TABLAS_CICLO2
-        and nombre.rsplit(".", 1)[-1] not in TABLAS_CICLO3
-    ]
-    engine = create_async_engine(settings.async_database_url)
+    nombre = nombre_base_objetivo()
+    archivo = BACKEND_ROOT / "sql" / "neon" / "01_esquema_hasta_ciclo2.sql"
+    if not archivo.is_file():
+        raise FileNotFoundError(f"Missing cycle baseline SQL: {archivo.name}")
+    conn = await asyncpg.connect(**_conexion_params(nombre))
     try:
-        async with engine.begin() as conn:
-            await conn.run_sync(Base.metadata.create_all, tables=tablas)
-        print("[+] Esquema Ciclo 1 aplicado desde los modelos.")
+        await conn.execute(archivo.read_text(encoding="utf-8"))
+        print("[+] Baseline SQL through Cycle 2 applied to the isolated test database.")
     finally:
-        await engine.dispose()
+        await conn.close()
 
 
 async def aplicar_esquema() -> None:
@@ -309,17 +318,34 @@ async def semilla_minima() -> None:
         Proveedor,
         Talla,
     )
-    from backend.app.core.modules.organizacion.models import Ciudad, Sucursal
-    from backend.app.core.modules.identidad_empresas.models import Rol, Usuario
+    from backend.app.core.modules.organizacion.models import Ciudad, Sucursal, TasaCambio
+    from backend.app.core.modules.identidad_empresas.models import Empresa, Rol, Usuario
 
     email_admin = os.getenv("TEST_ADMIN_EMAIL", "admin@fashionstore.com")
     clave_admin = os.getenv("TEST_ADMIN_PASSWORD", "Fashion123!")
 
     async with AsyncSessionLocal() as db:
         async with db.begin():
+            empresa = (
+                await db.execute(select(Empresa).where(Empresa.codigo == "fashionstore"))
+            ).scalars().first()
+            if empresa is None:
+                empresa = Empresa(
+                    id=uuid.UUID("0ddf24a9-edeb-510f-b8e2-22d41847f477"),
+                    codigo="fashionstore",
+                    nombre="FashionStore",
+                    razon_social="FashionStore",
+                    nombre_comercial="FashionStore",
+                    estado="ACTIVA",
+                )
+                db.add(empresa)
+                await db.flush()
+                print("  + Empresa heredada fashionstore")
+
             roles = {}
             for nombre in (
                 "ADMINISTRADOR",
+                "SUPERADMIN",
                 "ENCARGADO",
                 "CAJERO",
                 "PROVEEDOR",
@@ -362,6 +388,7 @@ async def semilla_minima() -> None:
                 db.add(
                     Sucursal(
                         id=uuid.uuid4(),
+                        empresa_id=empresa.id,
                         ciudad_id=ciudad.id,
                         nombre="Sucursal Pruebas",
                         direccion="Av. Pruebas 123",
@@ -391,6 +418,7 @@ async def semilla_minima() -> None:
                 db.add(
                     Usuario(
                         id=uuid.uuid4(),
+                        empresa_id=empresa.id,
                         rol_id=roles["ADMINISTRADOR"].id,
                         nombres="Administrador",
                         apellidos="Pruebas",
@@ -407,36 +435,62 @@ async def semilla_minima() -> None:
             # Maestros mínimos de catálogo (algunas pruebas CU04 los asumen
             # existentes y crean el resto de sus datos por sí mismas).
             talla = (
-                await db.execute(select(Talla).limit(1))
+                await db.execute(select(Talla).where(Talla.empresa_id == empresa.id).limit(1))
             ).scalars().first()
             if talla is None:
-                db.add(Talla(nombre="M", orden=3, activo=True))
+                db.add(Talla(empresa_id=empresa.id, nombre="M", orden=3, activo=True))
                 print("  + Talla M")
             color = (
-                await db.execute(select(Color).limit(1))
+                await db.execute(select(Color).where(Color.empresa_id == empresa.id).limit(1))
             ).scalars().first()
             if color is None:
                 db.add(
-                    Color(nombre="Negro", codigo_hex="#000000", activo=True)
+                    Color(empresa_id=empresa.id, nombre="Negro", codigo_hex="#000000", activo=True)
                 )
                 print("  + Color Negro")
             categoria = (
-                await db.execute(select(Categoria).limit(1))
+                await db.execute(select(Categoria).where(Categoria.empresa_id == empresa.id).limit(1))
             ).scalars().first()
             if categoria is None:
-                db.add(Categoria(nombre="General", activo=True))
+                db.add(Categoria(empresa_id=empresa.id, nombre="General", activo=True))
                 print("  + Categoria General")
             proveedor = (
-                await db.execute(select(Proveedor).limit(1))
+                await db.execute(select(Proveedor).where(Proveedor.empresa_id == empresa.id).limit(1))
             ).scalars().first()
             if proveedor is None:
                 db.add(
                     Proveedor(
+                        empresa_id=empresa.id,
                         razon_social="Proveedor Pruebas",
                         nit="000000000",
                     )
                 )
                 print("  + Proveedor Pruebas")
+
+            ahora = datetime.now(timezone.utc)
+            tasa_actual = (
+                await db.execute(
+                    select(TasaCambio).where(
+                        TasaCambio.vigente_desde <= ahora,
+                        (TasaCambio.vigente_hasta.is_(None) | (TasaCambio.vigente_hasta > ahora)),
+                    ).order_by(TasaCambio.vigente_desde.desc()).limit(1)
+                )
+            ).scalars().first()
+            if tasa_actual is None:
+                ultima_version = (
+                    await db.execute(select(TasaCambio.version).order_by(TasaCambio.version.desc()).limit(1))
+                ).scalar_one_or_none()
+                db.add(
+                    TasaCambio(
+                        id=uuid.uuid4(),
+                        version=(ultima_version or 0) + 1,
+                        tasa_bob_por_usd=Decimal("6.96"),
+                        vigente_desde=ahora - timedelta(days=365),
+                        vigente_hasta=None,
+                        motivo="Tasa inicial de la base de pruebas",
+                    )
+                )
+                print("  + Tasa de cambio BOB/USD para pruebas")
     print("[+] Semilla mínima lista.")
 
 

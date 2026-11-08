@@ -47,6 +47,7 @@ from backend.app.core.modules.inventario.models import InventarioSucursal, Movim
 from backend.app.core.modules.organizacion.models import Sucursal
 from backend.app.core.modules.reservas_traslados.models import Reserva
 from backend.app.core.modules.identidad_empresas.models import Cliente, Rol, Usuario
+from tests.helpers_ciclo2 import EMPRESA_TEST_ID
 from backend.app.core.modules.inventario.repositories.inventario_repository import InventarioRepository
 from backend.app.core.modules.inventario.repositories.movimiento_repository import MovimientoRepository
 
@@ -67,13 +68,14 @@ async def base_infra():
                 await db.execute(select(Rol).where(Rol.nombre == "CLIENTE"))
             ).scalars().one()
             sucursal = (await db.execute(select(Sucursal).limit(1))).scalars().one()
-            talla = Talla(nombre=f"T-INFRA-{uid}", orden=99, activo=True)
-            color = Color(nombre=f"Color Infra {uid}", codigo_hex="#123456", activo=True)
-            categoria = Categoria(nombre=f"Cat Infra {uid}", activo=True)
-            proveedor = Proveedor(razon_social=f"Prov Infra {uid}", nit=f"900900{uid[:6]}")
+            talla = Talla(empresa_id=EMPRESA_TEST_ID, nombre=f"T-INFRA-{uid}", orden=99, activo=True)
+            color = Color(empresa_id=EMPRESA_TEST_ID, nombre=f"Color Infra {uid}", codigo_hex="#123456", activo=True)
+            categoria = Categoria(empresa_id=EMPRESA_TEST_ID, nombre=f"Cat Infra {uid}", activo=True)
+            proveedor = Proveedor(empresa_id=EMPRESA_TEST_ID, razon_social=f"Prov Infra {uid}", nit=f"900900{uid[:6]}")
             db.add_all([talla, color, categoria, proveedor])
             await db.flush()
             producto = Producto(
+                empresa_id=EMPRESA_TEST_ID,
                 categoria_id=categoria.id,
                 proveedor_principal_id=proveedor.id,
                 nombre=f"Producto Infra {uid}",
@@ -83,6 +85,7 @@ async def base_infra():
             db.add(producto)
             await db.flush()
             variante = VarianteProducto(
+                empresa_id=EMPRESA_TEST_ID,
                 producto_id=producto.id,
                 talla_id=talla.id,
                 color_id=color.id,
@@ -93,6 +96,7 @@ async def base_infra():
             db.add(variante)
             await db.flush()
             usuario = Usuario(
+                empresa_id=EMPRESA_TEST_ID,
                 rol_id=rol.id,
                 nombres="Cliente",
                 apellidos=f"Infra {uid}",
@@ -473,6 +477,7 @@ async def test_idempotencia_clave_mismo_y_distinto_payload(base_infra):
             async with db.begin():
                 assert await resolver_idempotencia(db, Reserva, clave, h1) is None
                 reserva = Reserva(
+                    empresa_id=EMPRESA_TEST_ID,
                     cliente_id=cliente_id,
                     sucursal_destino_id=sucursal_id,
                     codigo=f"FS-{uuid.uuid4().hex[:6].upper()}",

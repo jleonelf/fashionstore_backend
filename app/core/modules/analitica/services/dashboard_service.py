@@ -63,7 +63,7 @@ class DashboardService:
             if sucursal is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Sucursal no encontrada")
 
-        base = select(Venta).where(Venta.estado == "PAGADA")
+        base = select(Venta).where(Venta.estado.in_(["PAGADA", "PARCIALMENTE_DEVUELTA", "DEVUELTA"]))
         if usuario.empresa_id:
             base = base.where(Venta.empresa_id == usuario.empresa_id)
         if desde is not None:
@@ -188,7 +188,52 @@ class DashboardService:
             pago_q = pago_q.where(Pago.pagado_en >= desde)
         if hasta is not None:
             pago_q = pago_q.where(Pago.pagado_en <= hasta)
+        if sucursal_id is not None:
+            pago_q = pago_q.join(Venta, Pago.venta_id == Venta.id).where(Venta.sucursal_id == sucursal_id)
         dinero_capturado = Decimal(str((await self.db.execute(pago_q)).scalar() or 0))
+
+        # Devoluciones y Reembolsos para métricas consistentes
+        total_devoluciones = Decimal("0.00")
+        total_reembolsos = Decimal("0.00")
+        if ventas:
+            ids = [v.id for v in ventas]
+            try:
+                from backend.app.core.modules.posventa.services.devolucion_service import Devolucion, DetalleDevolucion
+                dev_q = (
+                    select(
+                        func.coalesce(
+                            func.sum(
+                                DetalleDevolucion.cantidad_aceptada * (
+                                    DetalleVenta.precio_unitario - (DetalleVenta.descuento / func.nullif(DetalleVenta.cantidad, 0))
+                                )
+                            ),
+                            0,
+                        )
+                    )
+                    .join(DetalleVenta, DetalleVenta.id == DetalleDevolucion.detalle_venta_id)
+                    .join(Devolucion, Devolucion.id == DetalleDevolucion.devolucion_id)
+                    .where(
+                        Devolucion.venta_id.in_(ids),
+                        Devolucion.estado != "RECHAZADA",
+                        DetalleDevolucion.cantidad_aceptada > 0,
+                    )
+                )
+                total_devoluciones = Decimal(str((await self.db.execute(dev_q)).scalar() or 0)).quantize(Decimal("0.01"))
+            except Exception:
+                total_devoluciones = Decimal("0.00")
+
+            try:
+                from backend.app.core.modules.posventa.models import ObligacionReembolso
+                reemb_q = select(func.coalesce(func.sum(ObligacionReembolso.monto_bob), 0)).where(
+                    ObligacionReembolso.empresa_id == (usuario.empresa_id or ventas[0].empresa_id),
+                    ObligacionReembolso.origen_id.in_(ids),
+                    ObligacionReembolso.estado.in_(["AUTORIZADA", "COMPLETADA"]),
+                )
+                total_reembolsos = Decimal(str((await self.db.execute(reemb_q)).scalar() or 0)).quantize(Decimal("0.01"))
+            except Exception:
+                total_reembolsos = Decimal("0.00")
+
+        neto_comercial = max(Decimal("0.00"), subtotal_bruto - total_descuentos - total_devoluciones)
 
         # Pedidos pendientes de cumplimiento
         ped_pend_q = select(func.count(PedidoEntrega.id), func.coalesce(func.sum(PedidoEntrega.costo_entrega), 0)).where(
@@ -209,9 +254,9 @@ class DashboardService:
             ticket_promedio=ticket,
             ventas_brutas=subtotal_bruto,
             descuentos=total_descuentos,
-            devoluciones=Decimal("0.00"),
-            reembolsos=Decimal("0.00"),
-            neto_comercial=ingresos,
+            devoluciones=total_devoluciones,
+            reembolsos=total_reembolsos,
+            neto_comercial=neto_comercial,
             dinero_capturado=dinero_capturado if dinero_capturado > Decimal("0") else ingresos,
             pedidos_pendientes_cumplimiento=ped_pend_count,
             monto_pedidos_pendientes=ped_pend_monto,

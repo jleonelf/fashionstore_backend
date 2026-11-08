@@ -150,7 +150,9 @@ class CambioSolicitudDTO(BaseModel):
 
 
 class ResolverDiferenciaDTO(BaseModel):
-    destino_diferencia: Literal["SALDO", "REEMBOLSO", "PAGO_CLIENTE", "SIN_DIFERENCIA"]
+    destino_diferencia: Optional[str] = None
+    saldo_bob: Optional[Decimal] = None
+    reembolso_bob: Optional[Decimal] = None
 
 
 class DetalleCambioItemDTO(BaseModel):
@@ -263,7 +265,12 @@ class CambioService:
         lineas_orig_procesadas = []
 
         for item in dto.lineas_originales:
-            det = await self.db.get(DetalleVenta, item.detalle_venta_id)
+            stmt_det = (
+                select(DetalleVenta)
+                .where(DetalleVenta.id == item.detalle_venta_id)
+                .with_for_update()
+            )
+            det = (await self.db.execute(stmt_det)).scalars().first()
             if det is None or det.venta_id != venta.id:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
@@ -324,7 +331,11 @@ class CambioService:
 
         cambio_id = uuid.uuid4()
         nota_codigo = "CAMB-" + secrets.token_hex(4).upper()
-        vence_espera = ahora + timedelta(days=7)
+        # Vigencia contractual CU08: Nota de cambio por 7 días; oferta de reemplazo específico por 48 horas
+        if len(dto.reemplazos) > 0:
+            vence_espera = ahora + timedelta(hours=48)
+        else:
+            vence_espera = ahora + timedelta(days=7)
 
         cambio = Cambio(
             id=cambio_id,
@@ -441,13 +452,37 @@ class CambioService:
     ) -> CambioDTO:
         digest = hash_payload(dto.model_dump(mode="json"))
 
-        cambio = await self.db.get(Cambio, cambio_id)
+        stmt_cambio = select(Cambio).where(Cambio.id == cambio_id).with_for_update()
+        cambio = (await self.db.execute(stmt_cambio)).scalars().first()
         if cambio is None or cambio.empresa_id != usuario.empresa_id:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Cambio no encontrado")
 
         rol = (usuario.rol.nombre if usuario.rol else "").upper()
         if rol == "CLIENTE" and cambio.cliente_id != usuario.id:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="El cambio pertenece a otro cliente")
+
+        if not dto.destino_diferencia:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="El campo 'destino_diferencia' es obligatorio",
+            )
+
+        destino = dto.destino_diferencia.upper().strip()
+
+        # Rechazo explícito de combinaciones simultáneas o ambiguas (CU08 exclusión estricta)
+        if destino in ("SALDO_Y_REEMBOLSO", "SALDO_REEMBOLSO", "MIXTO", "AMBOS") or (
+            dto.saldo_bob is not None and dto.reembolso_bob is not None and dto.saldo_bob > 0 and dto.reembolso_bob > 0
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Resolución financiera simultánea (SALDO + REEMBOLSO) prohibida; la resolución debe ser exclusivamente SALDO o REEMBOLSO",
+            )
+
+        if destino not in ("SALDO", "REEMBOLSO", "PAGO_CLIENTE", "SIN_DIFERENCIA"):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Destino de diferencia inválido o ambiguo: '{dto.destino_diferencia}'. Debe ser SALDO, REEMBOLSO, PAGO_CLIENTE o SIN_DIFERENCIA",
+            )
 
         if cambio.estado == "PENDIENTE_EVALUACION":
             raise HTTPException(
@@ -470,25 +505,38 @@ class CambioService:
         dif = cambio.diferencia_bob
         ahora = self.reloj.ahora()
 
+        # Verificar vigencia de la oferta (48 horas con reemplazos) o nota (7 días sin reemplazos)
+        if cambio.vence_espera_en is not None and ahora > cambio.vence_espera_en:
+            if tiene_reemplazos:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="La oferta de reemplazo ha vencido (plazo de 48 horas expirado)",
+                )
+            else:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="La nota de cambio ha vencido (plazo de 7 días expirado)",
+                )
+
         # REGLA OBLIGATORIA: Excluye reemplazo y saldo/reembolso simultáneos
         # "Misma unidad no obtiene simultáneamente reemplazo, saldo y reembolso."
         if tiene_reemplazos:
             if dif > Decimal("0.00"):
                 # La prenda de reemplazo cuesta más: el cliente DEBE pagar la diferencia a la tienda
-                if dto.destino_diferencia != "PAGO_CLIENTE":
+                if destino != "PAGO_CLIENTE":
                     raise HTTPException(
                         status_code=status.HTTP_400_BAD_REQUEST,
                         detail="La diferencia es a favor de la tienda; destino debe ser PAGO_CLIENTE",
                     )
             elif dif < Decimal("0.00"):
                 # La prenda de reemplazo cuesta menos: la tienda devuelve el sobrante como SALDO o REEMBOLSO (jamás ambos)
-                if dto.destino_diferencia not in ("SALDO", "REEMBOLSO"):
+                if destino not in ("SALDO", "REEMBOLSO"):
                     raise HTTPException(
                         status_code=status.HTTP_400_BAD_REQUEST,
                         detail="La diferencia es a favor del cliente; debe elegir SALDO o REEMBOLSO exclusivo",
                     )
                 sobrante = abs(dif)
-                if dto.destino_diferencia == "SALDO":
+                if destino == "SALDO":
                     mov_saldo = MovimientoSaldo(
                         id=uuid.uuid4(),
                         empresa_id=usuario.empresa_id,
@@ -502,7 +550,7 @@ class CambioService:
                         creado_en=ahora,
                     )
                     self.db.add(mov_saldo)
-                elif dto.destino_diferencia == "REEMBOLSO":
+                elif destino == "REEMBOLSO":
                     reemb = ObligacionReembolso(
                         id=uuid.uuid4(),
                         empresa_id=usuario.empresa_id,
@@ -518,19 +566,19 @@ class CambioService:
                     self.db.add(reemb)
             else:
                 # diferencia == 0
-                if dto.destino_diferencia != "SIN_DIFERENCIA":
+                if destino != "SIN_DIFERENCIA":
                     raise HTTPException(
                         status_code=status.HTTP_400_BAD_REQUEST,
                         detail="Sin diferencia monetaria; destino debe ser SIN_DIFERENCIA",
                     )
         else:
             # Sin reemplazo (ej. nota vencida o falta de stock): se devuelve el valor reconocido total como SALDO o REEMBOLSO
-            if dto.destino_diferencia not in ("SALDO", "REEMBOLSO"):
+            if destino not in ("SALDO", "REEMBOLSO"):
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail="Sin prendas de reemplazo; debe liquidar valor reconocido a SALDO o REEMBOLSO",
                 )
-            if dto.destino_diferencia == "SALDO":
+            if destino == "SALDO":
                 mov_saldo = MovimientoSaldo(
                     id=uuid.uuid4(),
                     empresa_id=usuario.empresa_id,
@@ -544,7 +592,7 @@ class CambioService:
                     creado_en=ahora,
                 )
                 self.db.add(mov_saldo)
-            elif dto.destino_diferencia == "REEMBOLSO":
+            elif destino == "REEMBOLSO":
                 reemb = ObligacionReembolso(
                     id=uuid.uuid4(),
                     empresa_id=usuario.empresa_id,

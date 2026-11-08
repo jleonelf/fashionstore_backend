@@ -14,7 +14,7 @@ from backend.app.core.database import AsyncSessionLocal
 from backend.app.core.modules.catalogo.models import (
     Categoria, Color, Producto, Talla, VarianteProducto,
 )
-from tests.helpers_ciclo2 import UsuarioPrueba  # noqa: F401  re-export
+from tests.helpers_ciclo2 import EMPRESA_TEST_ID, UsuarioPrueba  # noqa: F401  re-export
 
 
 def clave() -> str:
@@ -115,18 +115,20 @@ async def crear_variante_probador(admin, sucursal_id: str, disponible: int = 5,
     uid = uuid.uuid4().hex[:6]
     async with AsyncSessionLocal() as db:
         async with db.begin():
-            talla = Talla(nombre=f"T-T17-{tag}-{uid}", orden=1, activo=True)
-            color = Color(nombre=f"Color T17 {tag} {uid}", codigo_hex="#FFFFFF", activo=True)
-            categoria = Categoria(nombre=f"Camisa T17 {tag} {uid}", activo=True)
+            talla = Talla(empresa_id=EMPRESA_TEST_ID, nombre=f"T-T17-{tag}-{uid}", orden=1, activo=True)
+            color = Color(empresa_id=EMPRESA_TEST_ID, nombre=f"Color T17 {tag} {uid}", codigo_hex="#FFFFFF", activo=True)
+            categoria = Categoria(empresa_id=EMPRESA_TEST_ID, nombre=f"Camisa T17 {tag} {uid}", activo=True)
             db.add_all([talla, color, categoria])
             await db.flush()
             producto = Producto(
+                empresa_id=EMPRESA_TEST_ID,
                 categoria_id=categoria.id, nombre=f"Camisa prueba {tag} {uid}",
                 precio_base=150, activo=True,
             )
             db.add(producto)
             await db.flush()
             variante = VarianteProducto(
+                empresa_id=EMPRESA_TEST_ID,
                 producto_id=producto.id, talla_id=talla.id, color_id=color.id,
                 sku=f"SKU-T17-{tag}-{uid}".upper(), precio=150,
                 recurso_prueba_virtual=f"https://cdn.fashionstore.test/prendas/{uid}.webp",

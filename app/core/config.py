@@ -26,6 +26,15 @@ class Settings(BaseSettings):
     EXPIRACION_JOB_ACTIVO: bool = os.getenv("EXPIRACION_JOB_ACTIVO", "false").lower() == "true"
     EXPIRACION_JOB_MINUTOS: int = int(os.getenv("EXPIRACION_JOB_MINUTOS", "10"))
 
+    # Credenciales push. La ruta local se lee desde .env; en Render se puede
+    # proporcionar el JSON completo mediante FCM_SERVICE_ACCOUNT_JSON.
+    GOOGLE_APPLICATION_CREDENTIALS: str = ""
+    FCM_SERVICE_ACCOUNT_JSON: str = ""
+    FCM_PROJECT_ID: str = ""
+    VAPID_PRIVATE_KEY: str = ""
+    VAPID_PUBLIC_KEY: str = ""
+    VAPID_SUBJECT: str = "mailto:admin@fashionstore.local"
+
     # Ciclo 3 — Stripe Test Mode (claves solo en backend/.env, nunca en Git).
     STRIPE_ENABLED: bool = os.getenv("STRIPE_ENABLED", "false").lower() == "true"
     STRIPE_SECRET_KEY: str = os.getenv("STRIPE_SECRET_KEY", "")

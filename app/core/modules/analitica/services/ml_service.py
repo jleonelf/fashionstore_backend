@@ -7,6 +7,8 @@ verificable de artefactos en disco con SHA-256 real.
 """
 import hashlib
 import json
+import os
+import tempfile
 import uuid
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -38,6 +40,17 @@ def _ahora_utc() -> datetime:
 
 
 def _obtener_directorio_artefactos() -> Path:
+    env_dir = os.environ.get("FASHIONSTORE_ARTEFACTOS_DIR")
+    if env_dir:
+        p = Path(env_dir)
+        p.mkdir(parents=True, exist_ok=True)
+        return p
+    if os.environ.get("PYTEST_CURRENT_TEST"):
+        # En entorno de pruebas automatizadas, usar almacenamiento temporal aislado
+        # para evitar generar artefactos residuales en el repositorio git.
+        p = Path(tempfile.gettempdir()) / "fashionstore_test_artefactos"
+        p.mkdir(parents=True, exist_ok=True)
+        return p
     base = Path(__file__).resolve().parents[5] / "artefactos"
     base.mkdir(parents=True, exist_ok=True)
     return base

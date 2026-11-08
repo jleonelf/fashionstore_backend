@@ -46,6 +46,7 @@ from backend.app.core.modules.reservas_traslados.services.reserva_transaccional 
 )
 from backend.app.core.modules.identidad_empresas.services.plan_service import PlanService
 from backend.app.core.modules.reservas_traslados.schemas_sincronizacion import (
+    AutorizacionCobroV3DTO,
     OperacionDTO,
     ReferenciaHorariaDTO,
     ReferenciaHorariaCrearDTO,
@@ -133,6 +134,60 @@ def calcular_hash_operacion(dto: OperacionDTO) -> str:
     }
     texto = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(texto.encode("utf-8")).hexdigest()
+
+
+def calcular_huella_compra_canonica(
+    empresa_id: uuid.UUID,
+    usuario_id: uuid.UUID,
+    sucursal_id: uuid.UUID,
+    modalidad: str,
+    direccion: Optional[str],
+    lineas: list,
+    base_bob: Decimal,
+    descuento_bob: Decimal,
+    envio_bob: Decimal,
+    total_bob: Decimal,
+    moneda_cobro: str,
+    importe_cobro: Decimal,
+    tasa_id: uuid.UUID,
+    tasa_bob_por_usd: Decimal,
+    condiciones_version: str,
+    vigente_hasta: datetime,
+) -> str:
+    """Calcula el SHA-256 canónico de la compra conforme a payloads.md:41."""
+    lineas_ord = sorted(
+        [
+            {
+                "cantidad": int(l["cantidad"] if isinstance(l, dict) else l[1]),
+                "precio_unitario_bob": f"{Decimal(str(l['precio_unitario_bob'] if isinstance(l, dict) else l[2])):.2f}",
+                "variante_id": str(l["variante_id"] if isinstance(l, dict) else (l[0].id if hasattr(l[0], 'id') else l[0])),
+            }
+            for l in lineas
+        ],
+        key=lambda x: x["variante_id"],
+    )
+    payload = {
+        "base_bob": f"{Decimal(str(base_bob)):.2f}",
+        "condiciones_version": str(condiciones_version).strip(),
+        "descuento_bob": f"{Decimal(str(descuento_bob)):.2f}",
+        "empresa_id": str(empresa_id),
+        "envio_bob": f"{Decimal(str(envio_bob)):.2f}",
+        "importe_cobro": f"{Decimal(str(importe_cobro)):.2f}",
+        "lineas": lineas_ord,
+        "modalidad": str(modalidad).upper(),
+        "moneda_cobro": str(moneda_cobro).upper(),
+        "sucursal_id": str(sucursal_id),
+        "tasa_bob_por_usd": f"{Decimal(str(tasa_bob_por_usd)):.2f}",
+        "tasa_id": str(tasa_id),
+        "total_bob": f"{Decimal(str(total_bob)):.2f}",
+        "usuario_id": str(usuario_id),
+        "vigente_hasta": asegurar_utc(vigente_hasta).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
+    if direccion and modalidad == "DELIVERY":
+        payload["direccion"] = " ".join(str(direccion).split())
+
+    raw_json = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(raw_json.encode("utf-8")).hexdigest()
 
 
 
@@ -794,6 +849,16 @@ class SincronizacionService:
             dto.operacion_id, usuario.id, usuario.empresa_id
         )
         if existente is not None:
+            if existente.hash_solicitud == digest:
+                return self._resultado_de_operacion(existente, digest)
+            if existente.estado in ("PENDIENTE_INTERVENCION", "REQUIERE_NUEVA_ACEPTACION"):
+                return await self._continuar_operacion_compra_en_tx(
+                    existente=existente,
+                    usuario=usuario,
+                    dto=dto,
+                    digest=digest,
+                    ahora=self.reloj.ahora(),
+                )
             return self._resultado_de_operacion(existente, digest)
 
         ahora = self.reloj.ahora()
@@ -1046,9 +1111,9 @@ class SincronizacionService:
                 ),
             )
 
-        # Versión 3: requiere autorización de cobro completa y comprobación contra oferta central
-        aut = datos_dict.get("autorizacion_cobro")
-        if not aut:
+        # Versión 3: Si falta la autorización de cobro (objeto ausente o nulo), se conserva la solicitud sin cobro en PENDIENTE_INTERVENCION
+        aut_raw = datos_dict.get("autorizacion_cobro")
+        if not aut_raw:
             return await self._persistir_con_reintento(
                 dto,
                 digest,
@@ -1059,176 +1124,32 @@ class SincronizacionService:
                     ahora,
                     estado="PENDIENTE_INTERVENCION",
                     codigo="AUTORIZACION_REQUERIDA",
-                    detalle="Solicitud guardada; requiere autorización y método preparado para cobro automático",
+                    detalle="Solicitud guardada sin autorización de cobro; requiere método preparado y consentimiento para cobro automático al reconectar",
                 ),
             )
 
-        if hasattr(aut, "model_dump"):
-            aut = aut.model_dump(mode="json")
-
-        consentimiento = aut.get("consentimiento_id") or aut.get("consentimiento")
-        if consentimiento is None or (isinstance(consentimiento, bool) and not consentimiento):
-            return await self._persistir_con_reintento(
-                dto,
-                digest,
-                partial(
-                    self._persistir_rechazo_o_conflicto,
-                    dto,
-                    digest,
-                    ahora,
-                    estado="PENDIENTE_INTERVENCION",
-                    codigo="AUTORIZACION_REQUERIDA",
-                    detalle="Solicitud guardada; requiere autorización y método preparado para cobro automático",
-                ),
-            )
-
-        metodo_preparado_id_raw = aut.get("preparacion_pago_id") or aut.get("metodo_preparado_id")
-        if not metodo_preparado_id_raw:
-            return await self._persistir_con_reintento(
-                dto,
-                digest,
-                partial(
-                    self._persistir_rechazo_o_conflicto,
-                    dto,
-                    digest,
-                    ahora,
-                    estado="PENDIENTE_INTERVENCION",
-                    codigo="AUTORIZACION_REQUERIDA",
-                    detalle="Solicitud guardada; requiere autorización y método preparado para cobro automático",
-                ),
-            )
-
-        try:
-            metodo_preparado_id = uuid.UUID(str(metodo_preparado_id_raw))
-        except (ValueError, TypeError):
-            return await self._persistir_con_reintento(
-                dto,
-                digest,
-                partial(
-                    self._persistir_rechazo_o_conflicto,
-                    dto,
-                    digest,
-                    ahora,
-                    estado="PENDIENTE_INTERVENCION",
-                    codigo="AUTORIZACION_REQUERIDA",
-                    detalle="UUID de método preparado inválido",
-                ),
-            )
-
-        if aut.get("permite_cobro_al_reconectar") is False:
-            return await self._persistir_con_reintento(
-                dto,
-                digest,
-                partial(
-                    self._persistir_rechazo_o_conflicto,
-                    dto,
-                    digest,
-                    ahora,
-                    estado="PENDIENTE_INTERVENCION",
-                    codigo="AUTORIZACION_REQUERIDA",
-                    detalle="Solicitud no autoriza cobro automático al reconectar",
-                ),
-            )
-
-        # Consultar tasa vigente central y calcular oferta central
-        stmt_tasa = text("SELECT id, tasa_bob_por_usd FROM plataforma.tasas_cambio ORDER BY vigente_desde DESC LIMIT 1")
-        r_tasa = await self.db.execute(stmt_tasa)
-        f_tasa = r_tasa.first()
-        tasa_central_val = Decimal(str(f_tasa[1])) if f_tasa else Decimal("6.96")
-        total_usd_central = (total_central / tasa_central_val).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
-
-        # Validar oferta autorizada contra la oferta central
-        importe_bob_cliente = aut.get("total_bob") if aut.get("total_bob") is not None else aut.get("importe_bob")
-        if importe_bob_cliente is not None:
-            if Decimal(str(importe_bob_cliente)) != total_central:
-                return await self._persistir_con_reintento(
-                    dto,
-                    digest,
-                    partial(
-                        self._persistir_rechazo_o_conflicto,
-                        dto,
-                        digest,
-                        ahora,
-                        estado="REQUIERE_NUEVA_ACEPTACION",
-                        codigo="PRECIO_CAMBIADO",
-                        detalle=f"El importe central ({total_central} BOB) difiere del autorizado ({importe_bob_cliente} BOB)",
-                    ),
+        # Si el objeto está presente, debe cumplir estrictamente los 15 campos contractuales v3.
+        # Un objeto incompleto o inválido debe ser rechazado con 422 Unprocessable Entity.
+        if not isinstance(aut_raw, AutorizacionCobroV3DTO):
+            try:
+                aut = AutorizacionCobroV3DTO.model_validate(aut_raw)
+            except Exception as e:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail=f"Autorización de cobro v3 inválida o incompleta (requiere 15 campos y permite_cobro_al_reconectar=true): {str(e)}",
                 )
+        else:
+            aut = aut_raw
 
-        moneda_cobro = aut.get("moneda_cobro")
-        if moneda_cobro and moneda_cobro != "USD":
-            return await self._persistir_con_reintento(
-                dto,
-                digest,
-                partial(
-                    self._persistir_rechazo_o_conflicto,
-                    dto,
-                    digest,
-                    ahora,
-                    estado="REQUIERE_NUEVA_ACEPTACION",
-                    codigo="PRECIO_CAMBIADO",
-                    detalle="Moneda de cobro inválida (solo se admite USD)",
-                ),
+        if not aut.consentimiento_id or aut.permite_cobro_al_reconectar is not True:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Solicitud no autoriza cobro automático al reconectar (permite_cobro_al_reconectar debe ser true)",
             )
 
-        tasa_cliente = aut.get("tasa_bob_por_usd") if aut.get("tasa_bob_por_usd") is not None else aut.get("tasa")
-        if tasa_cliente is not None:
-            if Decimal(str(tasa_cliente)) != tasa_central_val:
-                return await self._persistir_con_reintento(
-                    dto,
-                    digest,
-                    partial(
-                        self._persistir_rechazo_o_conflicto,
-                        dto,
-                        digest,
-                        ahora,
-                        estado="REQUIERE_NUEVA_ACEPTACION",
-                        codigo="PRECIO_CAMBIADO",
-                        detalle=f"La tasa autorizada ({tasa_cliente}) difiere de la tasa vigente ({tasa_central_val})",
-                    ),
-                )
-
-        usd_cliente = aut.get("importe_cobro") if aut.get("importe_cobro") is not None else aut.get("importe_usd")
-        if usd_cliente is not None:
-            if Decimal(str(usd_cliente)) != total_usd_central:
-                return await self._persistir_con_reintento(
-                    dto,
-                    digest,
-                    partial(
-                        self._persistir_rechazo_o_conflicto,
-                        dto,
-                        digest,
-                        ahora,
-                        estado="REQUIERE_NUEVA_ACEPTACION",
-                        codigo="PRECIO_CAMBIADO",
-                        detalle=f"El importe USD autorizado ({usd_cliente}) difiere del central ({total_usd_central})",
-                    ),
-                )
-
-        vig_cliente = aut.get("vigente_hasta") or aut.get("vigencia_hasta")
-        if vig_cliente:
-            if isinstance(vig_cliente, str):
-                vig_dt = datetime.fromisoformat(vig_cliente.replace("Z", "+00:00"))
-            else:
-                vig_dt = vig_cliente
-            if asegurar_utc(vig_dt) <= ahora:
-                return await self._persistir_con_reintento(
-                    dto,
-                    digest,
-                    partial(
-                        self._persistir_rechazo_o_conflicto,
-                        dto,
-                        digest,
-                        ahora,
-                        estado="REQUIERE_NUEVA_ACEPTACION",
-                        codigo="PRECIO_CAMBIADO",
-                        detalle="La autorización de cobro ha expirado",
-                    ),
-                )
-
-        # Validar método preparado en base de datos
+        # Validar método preparado en base de datos: DEBE existir y estar en LISTO
         stmt_mp = select(MetodoPreparado).where(
-            MetodoPreparado.id == metodo_preparado_id,
+            MetodoPreparado.id == aut.preparacion_pago_id,
             MetodoPreparado.empresa_id == usuario.empresa_id,
             MetodoPreparado.cliente_id == usuario.id,
         )
@@ -1248,6 +1169,182 @@ class SincronizacionService:
                 ),
             )
 
+        # Consultar tasa vigente central y calcular oferta central
+        stmt_tasa = text("SELECT id, tasa_bob_por_usd FROM plataforma.tasas_cambio ORDER BY vigente_desde DESC LIMIT 1")
+        r_tasa = await self.db.execute(stmt_tasa)
+        f_tasa = r_tasa.first()
+        tasa_central_id = f_tasa[0] if f_tasa else None
+        tasa_central_val = Decimal(str(f_tasa[1])) if f_tasa else Decimal("6.96")
+        total_usd_central = (total_central / tasa_central_val).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+        # Validar concordancia estricta de oferta autorizada vs calculada centralmente
+        if aut.moneda_cobro != "USD":
+            return await self._persistir_con_reintento(
+                dto,
+                digest,
+                partial(
+                    self._persistir_rechazo_o_conflicto,
+                    dto,
+                    digest,
+                    ahora,
+                    estado="REQUIERE_NUEVA_ACEPTACION",
+                    codigo="PRECIO_CAMBIADO",
+                    detalle="Moneda de cobro inválida (solo se admite USD)",
+                ),
+            )
+
+        if tasa_central_id and aut.tasa_id != tasa_central_id:
+            return await self._persistir_con_reintento(
+                dto,
+                digest,
+                partial(
+                    self._persistir_rechazo_o_conflicto,
+                    dto,
+                    digest,
+                    ahora,
+                    estado="REQUIERE_NUEVA_ACEPTACION",
+                    codigo="PRECIO_CAMBIADO",
+                    detalle=f"La tasa_id autorizada ({aut.tasa_id}) difiere de la tasa vigente ({tasa_central_id})",
+                ),
+            )
+
+        if Decimal(str(aut.tasa_bob_por_usd)) != tasa_central_val:
+            return await self._persistir_con_reintento(
+                dto,
+                digest,
+                partial(
+                    self._persistir_rechazo_o_conflicto,
+                    dto,
+                    digest,
+                    ahora,
+                    estado="REQUIERE_NUEVA_ACEPTACION",
+                    codigo="PRECIO_CAMBIADO",
+                    detalle=f"La tasa autorizada ({aut.tasa_bob_por_usd}) difiere de la tasa vigente ({tasa_central_val})",
+                ),
+            )
+
+        if Decimal(str(aut.base_bob)) != subtotal_central:
+            return await self._persistir_con_reintento(
+                dto,
+                digest,
+                partial(
+                    self._persistir_rechazo_o_conflicto,
+                    dto,
+                    digest,
+                    ahora,
+                    estado="REQUIERE_NUEVA_ACEPTACION",
+                    codigo="PRECIO_CAMBIADO",
+                    detalle=f"El importe base central ({subtotal_central} BOB) difiere del autorizado ({aut.base_bob} BOB)",
+                ),
+            )
+
+        if Decimal(str(aut.envio_bob)) != envio_central:
+            return await self._persistir_con_reintento(
+                dto,
+                digest,
+                partial(
+                    self._persistir_rechazo_o_conflicto,
+                    dto,
+                    digest,
+                    ahora,
+                    estado="REQUIERE_NUEVA_ACEPTACION",
+                    codigo="PRECIO_CAMBIADO",
+                    detalle=f"El costo de envío central ({envio_central} BOB) difiere del autorizado ({aut.envio_bob} BOB)",
+                ),
+            )
+
+        if Decimal(str(aut.total_bob)) != total_central:
+            return await self._persistir_con_reintento(
+                dto,
+                digest,
+                partial(
+                    self._persistir_rechazo_o_conflicto,
+                    dto,
+                    digest,
+                    ahora,
+                    estado="REQUIERE_NUEVA_ACEPTACION",
+                    codigo="PRECIO_CAMBIADO",
+                    detalle=f"El importe total central ({total_central} BOB) difiere del autorizado ({aut.total_bob} BOB)",
+                ),
+            )
+
+        if Decimal(str(aut.importe_cobro)) != total_usd_central:
+            return await self._persistir_con_reintento(
+                dto,
+                digest,
+                partial(
+                    self._persistir_rechazo_o_conflicto,
+                    dto,
+                    digest,
+                    ahora,
+                    estado="REQUIERE_NUEVA_ACEPTACION",
+                    codigo="PRECIO_CAMBIADO",
+                    detalle=f"El importe USD central ({total_usd_central}) difiere del autorizado ({aut.importe_cobro})",
+                ),
+            )
+
+        if asegurar_utc(aut.vigente_hasta) <= ahora:
+            return await self._persistir_con_reintento(
+                dto,
+                digest,
+                partial(
+                    self._persistir_rechazo_o_conflicto,
+                    dto,
+                    digest,
+                    ahora,
+                    estado="REQUIERE_NUEVA_ACEPTACION",
+                    codigo="PRECIO_CAMBIADO",
+                    detalle="La autorización de cobro ha expirado",
+                ),
+            )
+
+        # Validar huella canónica
+        huella_calc = calcular_huella_compra_canonica(
+            empresa_id=usuario.empresa_id,
+            usuario_id=usuario.id,
+            sucursal_id=sucursal_id,
+            modalidad=modalidad,
+            direccion=datos_dict.get("direccion"),
+            lineas=lineas_procesadas,
+            base_bob=subtotal_central,
+            descuento_bob=Decimal("0.00"),
+            envio_bob=envio_central,
+            total_bob=total_central,
+            moneda_cobro="USD",
+            importe_cobro=total_usd_central,
+            tasa_id=tasa_central_id or aut.tasa_id,
+            tasa_bob_por_usd=tasa_central_val,
+            condiciones_version=aut.condiciones_version,
+            vigente_hasta=aut.vigente_hasta,
+        )
+        if aut.huella_compra != huella_calc:
+            from backend.app.core.modules.identidad_empresas.services.notificacion_service import NotificacionService
+            notif_svc = NotificacionService(self.db)
+            await notif_svc.emitir_notificacion(
+                empresa_id=usuario.empresa_id,
+                usuario_id=usuario.id,
+                tipo="CAMBIO_OFERTA",
+                titulo="Oferta actualizada requerida",
+                cuerpo="Las condiciones de la oferta cambiaron mientras estabas sin conexión. Se requiere tu nueva aceptación antes de continuar.",
+                recurso_tipo="OPERACION",
+                recurso_id=dto.operacion_id,
+                payload={"operacion_id": str(dto.operacion_id)},
+                dispositivo_id=dto.dispositivo_id,
+            )
+            return await self._persistir_con_reintento(
+                dto,
+                digest,
+                partial(
+                    self._persistir_rechazo_o_conflicto,
+                    dto,
+                    digest,
+                    ahora,
+                    estado="REQUIERE_NUEVA_ACEPTACION",
+                    codigo="PRECIO_CAMBIADO",
+                    detalle="La huella_compra no coincide con la oferta central calculada",
+                ),
+            )
+
         # Autorización completa y válida: crear pedido pendiente e integrar cobro real con Stripe
         return await self._persistir_con_reintento(
             dto,
@@ -1264,7 +1361,7 @@ class SincronizacionService:
                 subtotal=subtotal_central,
                 envio=envio_central,
                 total=total_central,
-                metodo_preparado_id=metodo_preparado_id,
+                metodo_preparado_id=aut.preparacion_pago_id,
                 lineas=lineas_procesadas,
             ),
         )
@@ -1496,6 +1593,19 @@ class SincronizacionService:
 
         # 3. Determinar resultado según estado devuelto por Stripe / pasarela
         if orden_dto.estado == "REQUIERE_ACCION_CLIENTE":
+            from backend.app.core.modules.identidad_empresas.services.notificacion_service import NotificacionService
+            notif_svc = NotificacionService(self.db)
+            await notif_svc.emitir_notificacion(
+                empresa_id=usuario.empresa_id,
+                usuario_id=usuario.id,
+                tipo="PAGO_REQUIERE_ACCION",
+                titulo="Autenticación bancaria 3D Secure requerida",
+                cuerpo="Tu banco solicita autenticación adicional para completar el cobro de tu compra.",
+                recurso_tipo="PEDIDO",
+                recurso_id=pedido.id,
+                payload={"pedido_id": str(pedido.id), "operacion_id": str(dto.operacion_id)},
+                dispositivo_id=dto.dispositivo_id,
+            )
             resultado = ResultadoOperacionDTO(
                 operacion_id=dto.operacion_id,
                 estado="REQUIERE_ACCION_CLIENTE",
@@ -1571,6 +1681,313 @@ class SincronizacionService:
         return resultado
 
 
+    async def _continuar_operacion_compra_en_tx(
+        self,
+        existente: OperacionSincronizacion,
+        usuario: Usuario,
+        dto: OperacionDTO,
+        digest: str,
+        ahora: datetime,
+    ) -> ResultadoOperacionDTO:
+        """Permite transición autorizada de una operación en PENDIENTE_INTERVENCION o REQUIERE_NUEVA_ACEPTACION
+
+        con nueva revisión y consentimiento correlacionada con la operación previa sin violar idempotencia ni duplicar pedidos.
+        """
+        datos = dto.datos
+        if hasattr(datos, "model_dump"):
+            datos_dict = datos.model_dump(mode="json")
+        elif isinstance(datos, dict):
+            datos_dict = dict(datos)
+        else:
+            datos_dict = getattr(datos, "__dict__", {})
+
+        sucursal_id_raw = datos_dict.get("sucursal_id")
+        try:
+            sucursal_id = uuid.UUID(str(sucursal_id_raw))
+        except (ValueError, TypeError):
+            sucursal_id = None
+
+        if sucursal_id is None:
+            return self._resultado_de_operacion(existente, existente.hash_solicitud)
+
+        sucursal = await self.sucursal_repo.buscarPorId(sucursal_id)
+        if sucursal is None or sucursal.empresa_id != usuario.empresa_id:
+            return self._resultado_de_operacion(existente, existente.hash_solicitud)
+
+        raw_lineas = datos_dict.get("lineas") or []
+        subtotal_central = Decimal("0.00")
+        lineas_procesadas = []
+        for l in raw_lineas:
+            vid = uuid.UUID(str(l.get("variante_id") if isinstance(l, dict) else l.variante_id))
+            cant = int(l.get("cantidad") if isinstance(l, dict) else l.cantidad)
+            var = await self.variante_repo.buscarPorId(vid)
+            p_unit = Decimal(str(var.precio or 0)) if var else Decimal("0.00")
+            tot_linea = p_unit * cant
+            subtotal_central += tot_linea
+            lineas_procesadas.append((var, cant, p_unit, tot_linea))
+
+        modalidad = str(datos_dict.get("modalidad", "RECOJO")).upper()
+        envio_central = Decimal("15.00") if modalidad == "DELIVERY" else Decimal("0.00")
+        total_central = subtotal_central + envio_central
+
+        aut_raw = datos_dict.get("autorizacion_cobro")
+        if not aut_raw:
+            resultado = ResultadoOperacionDTO(
+                operacion_id=dto.operacion_id,
+                estado="PENDIENTE_INTERVENCION",
+                codigo="AUTORIZACION_REQUERIDA",
+                recibida_en=ahora,
+                recurso_id=existente.recurso_id,
+                vence_en=ahora + timedelta(hours=24),
+                detalle="Solicitud guardada; requiere autorización y método preparado para cobro automático",
+                revision=existente.revision + 1,
+            )
+            existente.revision += 1
+            existente.hash_solicitud = digest
+            existente.solicitud = dto.model_dump(mode="json")
+            existente.estado = resultado.estado
+            existente.codigo = resultado.codigo
+            existente.detalle = resultado.detalle
+            existente.resultado = resultado.model_dump(mode="json")
+            await self.db.commit()
+            return resultado
+
+        if not isinstance(aut_raw, AutorizacionCobroV3DTO):
+            try:
+                aut = AutorizacionCobroV3DTO.model_validate(aut_raw)
+            except Exception:
+                resultado = ResultadoOperacionDTO(
+                    operacion_id=dto.operacion_id,
+                    estado="PENDIENTE_INTERVENCION",
+                    codigo="AUTORIZACION_REQUERIDA",
+                    recibida_en=ahora,
+                    recurso_id=existente.recurso_id,
+                    vence_en=ahora + timedelta(hours=24),
+                    detalle="Autorización de cobro incompleta; faltan campos de los 15 requeridos por contrato v3",
+                    revision=existente.revision + 1,
+                )
+                existente.revision += 1
+                existente.hash_solicitud = digest
+                existente.solicitud = dto.model_dump(mode="json")
+                existente.estado = resultado.estado
+                existente.codigo = resultado.codigo
+                existente.detalle = resultado.detalle
+                existente.resultado = resultado.model_dump(mode="json")
+                await self.db.commit()
+                return resultado
+        else:
+            aut = aut_raw
+
+        stmt_mp = select(MetodoPreparado).where(
+            MetodoPreparado.id == aut.preparacion_pago_id,
+            MetodoPreparado.empresa_id == usuario.empresa_id,
+            MetodoPreparado.cliente_id == usuario.id,
+        )
+        mp = (await self.db.execute(stmt_mp)).scalars().first()
+        if mp is None or mp.estado != "LISTO":
+            resultado = ResultadoOperacionDTO(
+                operacion_id=dto.operacion_id,
+                estado="PENDIENTE_INTERVENCION",
+                codigo="AUTORIZACION_REQUERIDA",
+                recibida_en=ahora,
+                recurso_id=existente.recurso_id,
+                vence_en=ahora + timedelta(hours=24),
+                detalle="Método preparado no encontrado, no listo o no pertenece al cliente",
+                revision=existente.revision + 1,
+            )
+            existente.revision += 1
+            existente.hash_solicitud = digest
+            existente.solicitud = dto.model_dump(mode="json")
+            existente.estado = resultado.estado
+            existente.codigo = resultado.codigo
+            existente.detalle = resultado.detalle
+            existente.resultado = resultado.model_dump(mode="json")
+            await self.db.commit()
+            return resultado
+
+        stmt_tasa = text("SELECT id, tasa_bob_por_usd FROM plataforma.tasas_cambio ORDER BY vigente_desde DESC LIMIT 1")
+        r_tasa = await self.db.execute(stmt_tasa)
+        f_tasa = r_tasa.first()
+        tasa_central_val = Decimal(str(f_tasa[1])) if f_tasa else Decimal("6.96")
+        total_usd_central = (total_central / tasa_central_val).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+        # Si difieren precios, tasa o expiró: REQUIERE_NUEVA_ACEPTACION
+        if (
+            Decimal(str(aut.total_bob)) != total_central
+            or Decimal(str(aut.tasa_bob_por_usd)) != tasa_central_val
+            or asegurar_utc(aut.vigente_hasta) <= ahora
+        ):
+            resultado = ResultadoOperacionDTO(
+                operacion_id=dto.operacion_id,
+                estado="REQUIERE_NUEVA_ACEPTACION",
+                codigo="PRECIO_CAMBIADO",
+                recibida_en=ahora,
+                recurso_id=existente.recurso_id,
+                vence_en=ahora + timedelta(hours=24),
+                detalle="La oferta autorizada difiere de la central o ha expirado",
+                revision=existente.revision + 1,
+            )
+            existente.revision += 1
+            existente.hash_solicitud = digest
+            existente.solicitud = dto.model_dump(mode="json")
+            existente.estado = resultado.estado
+            existente.codigo = resultado.codigo
+            existente.detalle = resultado.detalle
+            existente.resultado = resultado.model_dump(mode="json")
+            await self.db.commit()
+            return resultado
+
+        # Autorización válida: crear pedido o reutilizar existente si ya existía
+        pedido = None
+        if existente.recurso_id:
+            pedido = await self.db.get(PedidoCompra, existente.recurso_id)
+
+        if pedido is None:
+            pedido_id = uuid.uuid4()
+            pedido = PedidoCompra(
+                id=pedido_id,
+                empresa_id=usuario.empresa_id,
+                cliente_id=usuario.id,
+                sucursal_id=sucursal_id,
+                operacion_id=dto.operacion_id,
+                metodo_preparado_id=aut.preparacion_pago_id,
+                modalidad=modalidad,
+                direccion=datos_dict.get("direccion") if modalidad == "DELIVERY" else None,
+                subtotal_bob=subtotal_central,
+                descuento_bob=Decimal("0.00"),
+                envio_bob=envio_central,
+                total_bob=total_central,
+                estado="BORRADOR",
+                estado_pago="EN_VERIFICACION",
+                estado_cumplimiento="SIN_ASIGNACION",
+                revision=existente.revision + 1,
+                creado_en=ahora,
+                actualizado_en=ahora,
+            )
+            self.db.add(pedido)
+
+            doc_lineas = []
+            for var, cant, precio, tot in lineas_procesadas:
+                det = DetallePedido(
+                    id=uuid.uuid4(),
+                    empresa_id=usuario.empresa_id,
+                    pedido_id=pedido_id,
+                    variante_id=var.id,
+                    cantidad=cant,
+                    precio_unitario_bob=precio,
+                    descuento_bob=Decimal("0.00"),
+                    total_bob=tot,
+                    oferta_revision=1,
+                )
+                self.db.add(det)
+                doc_lineas.append(
+                    {
+                        "variante_id": str(var.id),
+                        "cantidad": cant,
+                        "precio_unitario_bob": str(precio),
+                        "total_bob": str(tot),
+                    }
+                )
+
+            doc_oferta = {
+                "pedido_id": str(pedido_id),
+                "revision": 1,
+                "lineas": doc_lineas,
+                "subtotal_bob": str(subtotal_central),
+                "descuento_bob": "0.00",
+                "envio_bob": str(envio_central),
+                "total_bob": str(total_central),
+            }
+            oferta = OfertaCompra(
+                id=uuid.uuid4(),
+                empresa_id=usuario.empresa_id,
+                pedido_id=pedido_id,
+                revision=1,
+                documento=doc_oferta,
+                documento_hash=hashlib.sha256(json.dumps(doc_oferta, sort_keys=True).encode("utf-8")).hexdigest(),
+                subtotal_bob=subtotal_central,
+                descuento_bob=Decimal("0.00"),
+                envio_bob=envio_central,
+                total_bob=total_central,
+                vigente_hasta=ahora + timedelta(hours=24),
+                creada_en=ahora,
+            )
+            self.db.add(oferta)
+            await self.db.flush()
+
+        stripe_svc = StripeService(self.db, reloj=self.reloj)
+        orden_dto = await stripe_svc.crear_orden_pago(
+            usuario=usuario,
+            datos=OrdenPagoCrearDTO(
+                contexto="PEDIDO",
+                recurso_id=pedido.id,
+                metodo_preparado_id=aut.preparacion_pago_id,
+                consentimiento_cobro_posterior=True,
+            ),
+            clave_idempotencia=dto.operacion_id,
+            autocommit=False,
+        )
+
+        if orden_dto.estado == "REQUIERE_ACCION_CLIENTE":
+            resultado = ResultadoOperacionDTO(
+                operacion_id=dto.operacion_id,
+                estado="REQUIERE_ACCION_CLIENTE",
+                codigo="ACCION_CLIENTE_REQUERIDA",
+                recibida_en=ahora,
+                recurso_id=pedido.id,
+                vence_en=ahora + timedelta(hours=24),
+                detalle="El proveedor de pago exige verificación 3D Secure del cliente",
+                revision=existente.revision + 1,
+            )
+        elif orden_dto.estado == "CAPTURADO":
+            await self.db.refresh(pedido)
+            if pedido.estado_cumplimiento == "COMPROMETIDO":
+                resultado = ResultadoOperacionDTO(
+                    operacion_id=dto.operacion_id,
+                    estado="ACEPTADA",
+                    codigo="OK",
+                    recibida_en=ahora,
+                    aceptada_en=ahora,
+                    recurso_id=pedido.id,
+                    vence_en=ahora + timedelta(hours=24),
+                    detalle="Compra offline sincronizada y stock asignado exitosamente",
+                    revision=existente.revision + 1,
+                )
+            else:
+                resultado = ResultadoOperacionDTO(
+                    operacion_id=dto.operacion_id,
+                    estado="ACEPTADA",
+                    codigo="SIN_STOCK",
+                    recibida_en=ahora,
+                    aceptada_en=ahora,
+                    recurso_id=pedido.id,
+                    vence_en=ahora + timedelta(hours=24),
+                    detalle="Pedido cobrado pero sin stock disponible; derivado a reembolso íntegro CU27",
+                    revision=existente.revision + 1,
+                )
+        else:
+            resultado = ResultadoOperacionDTO(
+                operacion_id=dto.operacion_id,
+                estado="PENDIENTE_PAGO",
+                codigo="PAGO_EN_VERIFICACION",
+                recibida_en=ahora,
+                recurso_id=pedido.id,
+                vence_en=ahora + timedelta(hours=24),
+                detalle="Pago en verificación con el proveedor",
+                revision=existente.revision + 1,
+            )
+
+        existente.revision += 1
+        existente.hash_solicitud = digest
+        existente.solicitud = dto.model_dump(mode="json")
+        existente.estado = resultado.estado
+        existente.codigo = resultado.codigo
+        existente.detalle = resultado.detalle
+        existente.recurso_id = pedido.id
+        existente.resultado = resultado.model_dump(mode="json")
+        await self.db.commit()
+        return resultado
+
     async def consultarOperacion(
         self, usuario: Usuario, operacion_id: uuid.UUID
     ) -> ResultadoOperacionDTO:
@@ -1592,4 +2009,33 @@ class SincronizacionService:
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Operacion no encontrada",
             )
+
+        # Si es compra y tiene pedido asociado, reflejar el estado actual consultable
+        if op.tipo == "SOLICITAR_COMPRA" and op.recurso_id:
+            pedido = await self.db.get(PedidoCompra, op.recurso_id)
+            if pedido is not None and isinstance(op.resultado, dict):
+                actualizado = False
+                if pedido.estado_pago == "PAGADO":
+                    if pedido.estado_cumplimiento == "COMPROMETIDO":
+                        if op.resultado.get("estado") != "ACEPTADA" or op.resultado.get("codigo") != "OK":
+                            op.resultado["estado"] = "ACEPTADA"
+                            op.resultado["codigo"] = "OK"
+                            op.resultado["detalle"] = "Compra offline sincronizada y stock asignado exitosamente"
+                            op.estado = "ACEPTADA"
+                            op.codigo = "OK"
+                            op.detalle = op.resultado["detalle"]
+                            actualizado = True
+                    elif pedido.estado_cumplimiento == "NO_CUMPLIBLE" or pedido.estado == "NO_CUMPLIBLE":
+                        if op.resultado.get("codigo") != "SIN_STOCK":
+                            op.resultado["estado"] = "ACEPTADA"
+                            op.resultado["codigo"] = "SIN_STOCK"
+                            op.resultado["detalle"] = "Pedido cobrado pero sin stock disponible; derivado a reembolso íntegro CU27"
+                            op.estado = "ACEPTADA"
+                            op.codigo = "SIN_STOCK"
+                            op.detalle = op.resultado["detalle"]
+                            actualizado = True
+                if actualizado:
+                    await self.db.flush()
+                    await self.db.commit()
+
         return ResultadoOperacionDTO.model_validate(op.resultado)

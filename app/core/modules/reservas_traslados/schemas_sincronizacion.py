@@ -90,33 +90,24 @@ class OperacionDatosReservaDTO(BaseModel):
 
 
 class AutorizacionCobroV3DTO(BaseModel):
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="forbid")
 
-    # Contrato formal v3 (operacion.schema.json)
-    consentimiento_id: Optional[uuid.UUID] = None
-    aceptado_local_en: Optional[datetime] = None
-    huella_compra: Optional[str] = None
-    base_bob: Optional[Decimal] = None
-    descuento_bob: Optional[Decimal] = None
-    envio_bob: Optional[Decimal] = None
-    total_bob: Optional[Decimal] = None
-    moneda_cobro: Optional[Literal["USD"]] = "USD"
-    importe_cobro: Optional[Decimal] = None
-    tasa_id: Optional[uuid.UUID] = None
-    tasa_bob_por_usd: Optional[Union[Decimal, str]] = None
-    condiciones_version: Optional[str] = None
-    vigente_hasta: Optional[datetime] = None
-    preparacion_pago_id: Optional[uuid.UUID] = None
-    permite_cobro_al_reconectar: Optional[bool] = True
-
-    # Compatibilidad y alias
-    consentimiento: Optional[bool] = None
-    metodo_preparado_id: Optional[uuid.UUID] = None
-    huella_dispositivo: Optional[str] = None
-    importe_bob: Optional[Decimal] = None
-    importe_usd: Optional[Decimal] = None
-    tasa: Optional[Decimal] = None
-    vigencia_hasta: Optional[datetime] = None
+    # Contrato formal v3 (operacion.schema.json:394-468) — 15 campos contractuales obligatorios
+    consentimiento_id: uuid.UUID = Field(..., description="UUID inmutable del consentimiento de cobro")
+    aceptado_local_en: datetime = Field(..., description="Instante de aceptación local en el dispositivo")
+    huella_compra: str = Field(..., pattern=r"^[a-f0-9]{64}$", description="Hash SHA-256 canónico de 64 caracteres hex")
+    base_bob: Decimal = Field(..., description="Subtotal base en BOB")
+    descuento_bob: Decimal = Field(..., description="Descuento aplicado en BOB")
+    envio_bob: Decimal = Field(..., description="Costo de envío en BOB")
+    total_bob: Decimal = Field(..., description="Total en BOB")
+    moneda_cobro: Literal["USD"] = Field(..., description="Moneda de cobro autorizada obligatoria (USD)")
+    importe_cobro: Decimal = Field(..., description="Importe total equivalente a cobrar en USD")
+    tasa_id: uuid.UUID = Field(..., description="UUID de la tasa de cambio vigente")
+    tasa_bob_por_usd: Union[Decimal, str] = Field(..., description="Tasa de cambio BOB por USD")
+    condiciones_version: str = Field(..., min_length=1, description="Versión de condiciones legales aceptadas")
+    vigente_hasta: datetime = Field(..., description="Fin de vigencia del consentimiento")
+    preparacion_pago_id: uuid.UUID = Field(..., description="UUID del método de pago preparado")
+    permite_cobro_al_reconectar: Literal[True] = Field(..., description="Consentimiento explícito obligatorio true")
 
 
 class OperacionDatosCompraDTO(BaseModel):

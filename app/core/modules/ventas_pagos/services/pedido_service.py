@@ -35,13 +35,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import relationship, selectinload
 
 from backend.app.core.database import Base
-from backend.app.core.idempotencia import hash_payload, resolver_idempotencia
+from backend.app.core.idempotencia_ciclo3 import (
+    guardar_respuesta,
+    hash_payload,
+    reclamar,
+)
 from backend.app.core.modules.catalogo.models import VarianteProducto
 from backend.app.core.modules.identidad_empresas.models import Usuario
 from backend.app.core.modules.inventario.models import MovimientoInventario
 from backend.app.core.modules.inventario.repositories.inventario_repository import InventarioRepository
 from backend.app.core.modules.organizacion.models import Sucursal
-from backend.app.core.modules.ventas_pagos.models import Carrito, DetalleCarrito, RegistroIdempotencia
+from backend.app.core.modules.ventas_pagos.models import Carrito, DetalleCarrito
 from backend.app.core.reloj import RelojSistema
 
 
@@ -425,22 +429,28 @@ class PedidoService:
     async def checkout(
         self, usuario: Usuario, dto: CheckoutCarritoDTO, canal: str, clave: uuid.UUID
     ) -> PedidoCompraDTO:
-        digest = hash_payload(dto.model_dump(mode="json"))
+        digest = hash_payload({**dto.model_dump(mode="json"), "canal": canal})
 
-        # Idempotencia previa con comercial.registros_idempotencia
-        if clave:
-            stmt_idm = select(RegistroIdempotencia).where(
-                RegistroIdempotencia.clave == clave,
-                RegistroIdempotencia.recurso_tipo == "PEDIDO_COMPRA",
+        # Reclamar la clave antes de crear el pedido. El marcador y el pedido
+        # se confirman en la misma transacciÃ³n; ante una peticiÃ³n concurrente,
+        # reclamar() espera el resultado ganador y evita el INSERT duplicado.
+        previo = await reclamar(
+            self.db,
+            clave=clave,
+            hash_solicitud=digest,
+            recurso_tipo="PEDIDO_COMPRA",
+            operacion="CHECKOUT_CARRO",
+            usuario_id=usuario.id,
+        )
+        if previo is not None:
+            if previo.respuesta:
+                return PedidoCompraDTO.model_validate(previo.respuesta)
+            if previo.recurso_id is not None:
+                return await self.obtener_pedido(usuario, previo.recurso_id)
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="El checkout con esta Idempotency-Key sigue en proceso",
             )
-            prev = (await self.db.execute(stmt_idm)).scalars().first()
-            if prev is not None:
-                if prev.hash_solicitud != digest:
-                    raise HTTPException(
-                        status_code=status.HTTP_409_CONFLICT,
-                        detail="Idempotency-Key ya usada con otra solicitud",
-                    )
-                return await self.obtener_pedido(usuario, prev.recurso_id)
 
         if not usuario.empresa_id:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Usuario sin empresa asignada")
@@ -460,6 +470,21 @@ class PedidoService:
 
         # Carrito
         carrito = await self.obtener_o_crear_carrito(usuario, canal)
+        # Serializa checkouts distintos sobre el mismo carrito. populate_existing
+        # actualiza su estado tras esperar el bloqueo de una transacciÃ³n anterior.
+        stmt_carrito = (
+            select(Carrito)
+            .where(Carrito.id == carrito.id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+        carrito_bloqueado = (await self.db.execute(stmt_carrito)).scalars().first()
+        if carrito_bloqueado is None or carrito_bloqueado.estado != "ACTIVO":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="El carrito ya fue convertido en un pedido",
+            )
+        carrito = carrito_bloqueado
         stmt_lineas = select(DetalleCarrito).where(DetalleCarrito.carrito_id == carrito.id)
         lineas = (await self.db.execute(stmt_lineas)).scalars().all()
         if not lineas:
@@ -572,7 +597,6 @@ class PedidoService:
         carrito.estado = "CONVERTIDO"
         carrito.actualizada_en = ahora
 
-        # Registro de idempotencia
         salida_dto = PedidoCompraDTO(
             pedido_id=pedido.id,
             empresa_id=pedido.empresa_id,
@@ -592,18 +616,15 @@ class PedidoService:
             lineas=detalles_dto,
         )
 
-        reg_idem = RegistroIdempotencia(
-            clave=clave,
+        await guardar_respuesta(
+            self.db,
+            clave,
+            salida_dto.model_dump(mode="json"),
+            recurso_id=pedido.id,
             usuario_id=usuario.id,
             recurso_tipo="PEDIDO_COMPRA",
             operacion="CHECKOUT_CARRO",
-            hash_solicitud=digest,
-            recurso_id=pedido.id,
-            respuesta=salida_dto.model_dump(mode="json"),
-            creada_en=ahora,
-            expira_en=ahora + timedelta(days=1),
         )
-        self.db.add(reg_idem)
 
         await self.db.commit()
         return salida_dto
@@ -750,6 +771,22 @@ class PedidoService:
 
             pedido.estado = "CONFIRMADO"
             pedido.estado_cumplimiento = "COMPROMETIDO"
+            from backend.app.core.modules.identidad_empresas.services.notificacion_service import NotificacionService
+            notif_svc = NotificacionService(self.db)
+            await notif_svc.emitir_notificacion(
+                empresa_id=pedido.empresa_id,
+                usuario_id=pedido.cliente_id,
+                tipo="COMPRA_EXITOSA",
+                titulo="Compra exitosa confirmada",
+                cuerpo=f"Tu compra por {pedido.total_bob} BOB ha sido confirmada y tus prendas estan reservadas.",
+                recurso_tipo="PEDIDO",
+                recurso_id=pedido.id,
+                payload={
+                    "pedido_id": str(pedido.id),
+                    "total_bob": str(pedido.total_bob),
+                    "estado": "CONFIRMADO",
+                },
+            )
         else:
             pedido.estado = "NO_CUMPLIBLE"
             pedido.estado_cumplimiento = "NO_CUMPLIBLE"
@@ -774,6 +811,50 @@ class PedidoService:
                     creada_en=ahora,
                 )
                 self.db.add(reembolso)
+
+            from backend.app.core.modules.identidad_empresas.services.notificacion_service import NotificacionService
+            notif_svc = NotificacionService(self.db)
+            await notif_svc.emitir_notificacion(
+                empresa_id=pedido.empresa_id,
+                usuario_id=pedido.cliente_id,
+                tipo="COMPRA_NO_CUMPLIBLE",
+                titulo="Stock insuficiente tras cobro",
+                cuerpo=f"Tu pedido #{pedido.id} no pudo asignarse por falta de stock. Se inicio un reembolso integro (CU27).",
+                recurso_tipo="PEDIDO",
+                recurso_id=pedido.id,
+                payload={
+                    "pedido_id": str(pedido.id),
+                    "total_bob": str(pedido.total_bob),
+                    "reembolso_id": str(reembolso.id) if 'reembolso' in locals() and reembolso else None,
+                    "estado": "NO_CUMPLIBLE",
+                },
+            )
+
+        # Actualizar resultado consultable en la operación de sincronización si proviene de CU05
+        if pedido.operacion_id:
+            from backend.app.core.modules.reservas_traslados.models import OperacionSincronizacion
+            stmt_op = select(OperacionSincronizacion).where(
+                OperacionSincronizacion.operacion_id == pedido.operacion_id,
+                OperacionSincronizacion.empresa_id == pedido.empresa_id,
+            )
+            op = (await self.db.execute(stmt_op)).scalars().first()
+            if op is not None:
+                if hay_stock:
+                    op.estado = "ACEPTADA"
+                    op.codigo = "OK"
+                    op.detalle = "Compra offline sincronizada y stock asignado exitosamente"
+                else:
+                    op.estado = "ACEPTADA"
+                    op.codigo = "SIN_STOCK"
+                    op.detalle = "Pedido cobrado pero sin stock disponible; derivado a reembolso íntegro CU27"
+                op.recurso_id = pedido.id
+                if op.aceptada_en is None:
+                    op.aceptada_en = self.reloj.ahora()
+                if isinstance(op.resultado, dict):
+                    op.resultado["estado"] = op.estado
+                    op.resultado["codigo"] = op.codigo
+                    op.resultado["detalle"] = op.detalle
+                    op.resultado["recurso_id"] = str(pedido.id)
 
         await self.db.flush()
         return pedido

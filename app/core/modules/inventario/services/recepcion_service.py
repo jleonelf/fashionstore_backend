@@ -73,6 +73,7 @@ class RecepcionService:
 
         try:
             lote = LoteRecepcion(
+                empresa_id=sucursal.empresa_id,
                 proveedor_id=dto.proveedor_id,
                 sucursal_id=dto.sucursal_id,
                 temporada_id=dto.temporada_id,

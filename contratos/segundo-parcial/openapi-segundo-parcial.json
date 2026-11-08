@@ -989,6 +989,73 @@
         }
       }
     },
+    "/api/v1/notificaciones/web-push/config": {
+      "get": {
+        "tags": [
+          "Notificaciones y Avisos"
+        ],
+        "summary": "Obtener clave pública VAPID para suscripción Web Push",
+        "operationId": "obtener_config_web_push_api_v1_notificaciones_web_push_config_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebPushConfigDTO"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/notificaciones/web-push/subscripcion": {
+      "post": {
+        "tags": [
+          "Notificaciones y Avisos"
+        ],
+        "summary": "Registrar o actualizar suscripción Web Push desde la PWA",
+        "operationId": "registrar_suscripcion_web_push_api_v1_notificaciones_web_push_subscripcion_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WebPushSubscripcionDTO"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DispositivoDTO"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
     "/api/v1/notificaciones/dispositivos": {
       "post": {
         "tags": [
@@ -1160,6 +1227,52 @@
                 "schema": {
                   "$ref": "#/components/schemas/NotificacionDTO"
                 }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/notificaciones/procesar-outbox": {
+      "post": {
+        "tags": [
+          "Notificaciones y Avisos"
+        ],
+        "summary": "Procesar eventos pendientes de outbox (Worker E2)",
+        "operationId": "procesar_eventos_outbox_api_v1_notificaciones_procesar_outbox_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "limite",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 20,
+              "title": "Limite"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
               }
             }
           },
@@ -7316,6 +7429,71 @@
         }
       }
     },
+    "/api/v1/ventas/presenciales/iniciar-stripe": {
+      "post": {
+        "tags": [
+          "Ventas Presenciales CU19"
+        ],
+        "summary": "Iniciar venta presencial con Stripe (CU19)",
+        "description": "Cajero o Administrador. Valida stock libre disponible, calcula precios/promociones oficiales en servidor, persiste la Venta en PENDIENTE_PAGO con líneas y total congelados, y crea OrdenPago(contexto='VENTA') emitiendo PaymentIntent en Stripe. Requiere header Idempotency-Key.",
+        "operationId": "iniciar_venta_presencial_stripe_api_v1_ventas_presenciales_iniciar_stripe_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Idempotency-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VentaPresencialIniciarStripeDTO"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VentaPresencialStripeIniciadaDTO"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/ventas/presenciales/liquidar": {
       "post": {
         "tags": [
@@ -11256,6 +11434,216 @@
         }
       }
     },
+    "/api/v1/pagos/stripe/metodos/{id}/confirmar": {
+      "post": {
+        "tags": [
+          "Stripe Test CU15/CU22"
+        ],
+        "summary": "Confirmar método preparado (SetupIntent CU22)",
+        "description": "Confirma el SetupIntent en la pasarela o consulta su éxito, recupera customer y payment_method y marca el método LISTO.",
+        "operationId": "confirmarMetodoPreparado_api_v1_pagos_stripe_metodos__id__confirmar_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/MetodoConfirmarDTO"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Datos"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MetodoPreparadoDTO"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Solicitud inválida",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "detail": {
+                      "oneOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "codigo": {
+                              "type": "string"
+                            },
+                            "mensaje": {
+                              "type": "string"
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  }
+                },
+                "example": {
+                  "detail": {
+                    "codigo": "SOLICITUD_INVALIDA",
+                    "mensaje": "Datos inválidos"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sesión inválida o ausente",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "detail": {
+                      "oneOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "codigo": {
+                              "type": "string"
+                            },
+                            "mensaje": {
+                              "type": "string"
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  }
+                },
+                "example": {
+                  "detail": {
+                    "codigo": "NO_AUTENTICADO",
+                    "mensaje": "Sesión requerida"
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "RBAC: rol, propietario o sucursal no autorizado",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "detail": {
+                      "oneOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "codigo": {
+                              "type": "string"
+                            },
+                            "mensaje": {
+                              "type": "string"
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  }
+                },
+                "example": {
+                  "detail": {
+                    "codigo": "FORBIDDEN",
+                    "mensaje": "No autorizado"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Recurso no encontrado",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "detail": {
+                      "oneOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "codigo": {
+                              "type": "string"
+                            },
+                            "mensaje": {
+                              "type": "string"
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  }
+                },
+                "example": {
+                  "detail": {
+                    "codigo": "NO_ENCONTRADO",
+                    "mensaje": "Recurso no encontrado"
+                  }
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/pagos/stripe/ordenes": {
       "post": {
         "tags": [
@@ -11573,6 +11961,152 @@
         }
       }
     },
+    "/api/v1/pagos/stripe/ordenes/activa-caja": {
+      "get": {
+        "tags": [
+          "Stripe Test CU15/CU22"
+        ],
+        "summary": "Recuperar orden activa de caja (CU19/H4)",
+        "description": "Recupera la orden de pago activa (PENDIENTE o CAPTURADO) del cajero para la sucursal/turno, refrescando el client_secret si está pendiente.",
+        "operationId": "recuperarOrdenActivaCaja_api_v1_pagos_stripe_ordenes_activa_caja_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "sucursal_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Sucursal Id"
+            }
+          },
+          {
+            "name": "turno_caja_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Turno Caja Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/OrdenActivaCajaDTO"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "title": "Response Recuperarordenactivacaja Api V1 Pagos Stripe Ordenes Activa Caja Get"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sesión inválida o ausente",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "detail": {
+                      "oneOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "codigo": {
+                              "type": "string"
+                            },
+                            "mensaje": {
+                              "type": "string"
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  }
+                },
+                "example": {
+                  "detail": {
+                    "codigo": "NO_AUTENTICADO",
+                    "mensaje": "Sesión requerida"
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "RBAC: rol, propietario o sucursal no autorizado",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "detail": {
+                      "oneOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "codigo": {
+                              "type": "string"
+                            },
+                            "mensaje": {
+                              "type": "string"
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  }
+                },
+                "example": {
+                  "detail": {
+                    "codigo": "FORBIDDEN",
+                    "mensaje": "No autorizado"
+                  }
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/pagos/stripe/ordenes/{id}": {
       "get": {
         "tags": [
@@ -11712,6 +12246,428 @@
                   "detail": {
                     "codigo": "NO_ENCONTRADO",
                     "mensaje": "Recurso no encontrado"
+                  }
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/pagos/stripe/ordenes/{id}/confirmar": {
+      "post": {
+        "tags": [
+          "Stripe Test CU15/CU22"
+        ],
+        "summary": "Confirmar o sincronizar orden de pago con Stripe (CU19/CU22)",
+        "description": "Sincroniza y confirma una OrdenPago PENDIENTE consultando la pasarela Stripe; transiciona a CAPTURADO si fue exitosa.",
+        "operationId": "confirmarOrdenPago_api_v1_pagos_stripe_ordenes__id__confirmar_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrdenPagoDTO"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Solicitud inválida",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "detail": {
+                      "oneOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "codigo": {
+                              "type": "string"
+                            },
+                            "mensaje": {
+                              "type": "string"
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  }
+                },
+                "example": {
+                  "detail": {
+                    "codigo": "SOLICITUD_INVALIDA",
+                    "mensaje": "Datos inválidos"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sesión inválida o ausente",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "detail": {
+                      "oneOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "codigo": {
+                              "type": "string"
+                            },
+                            "mensaje": {
+                              "type": "string"
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  }
+                },
+                "example": {
+                  "detail": {
+                    "codigo": "NO_AUTENTICADO",
+                    "mensaje": "Sesión requerida"
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "RBAC: rol, propietario o sucursal no autorizado",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "detail": {
+                      "oneOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "codigo": {
+                              "type": "string"
+                            },
+                            "mensaje": {
+                              "type": "string"
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  }
+                },
+                "example": {
+                  "detail": {
+                    "codigo": "FORBIDDEN",
+                    "mensaje": "No autorizado"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Recurso no encontrado",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "detail": {
+                      "oneOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "codigo": {
+                              "type": "string"
+                            },
+                            "mensaje": {
+                              "type": "string"
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  }
+                },
+                "example": {
+                  "detail": {
+                    "codigo": "NO_ENCONTRADO",
+                    "mensaje": "Recurso no encontrado"
+                  }
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/pagos/stripe/ordenes/{id}/cancelar": {
+      "post": {
+        "tags": [
+          "Stripe Test CU15/CU22"
+        ],
+        "summary": "Cancelar orden de pago (CU19/CU22)",
+        "description": "Cancela una orden de pago en estado PENDIENTE o REQUIERE_ACCION_CLIENTE y su venta asociada si procede. Rechaza con 409 si los fondos ya fueron capturados.",
+        "operationId": "cancelarOrdenPago_api_v1_pagos_stripe_ordenes__id__cancelar_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrdenPagoDTO"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Solicitud inválida",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "detail": {
+                      "oneOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "codigo": {
+                              "type": "string"
+                            },
+                            "mensaje": {
+                              "type": "string"
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  }
+                },
+                "example": {
+                  "detail": {
+                    "codigo": "SOLICITUD_INVALIDA",
+                    "mensaje": "Datos inválidos"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sesión inválida o ausente",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "detail": {
+                      "oneOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "codigo": {
+                              "type": "string"
+                            },
+                            "mensaje": {
+                              "type": "string"
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  }
+                },
+                "example": {
+                  "detail": {
+                    "codigo": "NO_AUTENTICADO",
+                    "mensaje": "Sesión requerida"
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "RBAC: rol, propietario o sucursal no autorizado",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "detail": {
+                      "oneOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "codigo": {
+                              "type": "string"
+                            },
+                            "mensaje": {
+                              "type": "string"
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  }
+                },
+                "example": {
+                  "detail": {
+                    "codigo": "FORBIDDEN",
+                    "mensaje": "No autorizado"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Recurso no encontrado",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "detail": {
+                      "oneOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "codigo": {
+                              "type": "string"
+                            },
+                            "mensaje": {
+                              "type": "string"
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  }
+                },
+                "example": {
+                  "detail": {
+                    "codigo": "NO_ENCONTRADO",
+                    "mensaje": "Recurso no encontrado"
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflicto de negocio",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "detail": {
+                      "oneOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "codigo": {
+                              "type": "string"
+                            },
+                            "mensaje": {
+                              "type": "string"
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  }
+                },
+                "example": {
+                  "detail": {
+                    "codigo": "CONFLICTO_NEGOCIO",
+                    "mensaje": "Operación incompatible con el estado"
                   }
                 }
               }
@@ -11967,6 +12923,271 @@
                   "detail": {
                     "codigo": "CONFLICTO_NEGOCIO",
                     "mensaje": "Operación incompatible con el estado"
+                  }
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/pagos/stripe/ordenes/{id}/reanudar": {
+      "post": {
+        "tags": [
+          "Stripe Test CU15/CU22"
+        ],
+        "summary": "Reanudar orden de pago provisional o pendiente (CU19/CU22 - J4)",
+        "description": "Reanuda una orden provisional o pendiente recuperando la clave idempotente durable de la venta sin duplicar venta ni Kardex.",
+        "operationId": "reanudarOrdenPago_api_v1_pagos_stripe_ordenes__id__reanudar_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrdenPagoDTO"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Solicitud inválida",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "detail": {
+                      "oneOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "codigo": {
+                              "type": "string"
+                            },
+                            "mensaje": {
+                              "type": "string"
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  }
+                },
+                "example": {
+                  "detail": {
+                    "codigo": "SOLICITUD_INVALIDA",
+                    "mensaje": "Datos inválidos"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sesión inválida o ausente",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "detail": {
+                      "oneOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "codigo": {
+                              "type": "string"
+                            },
+                            "mensaje": {
+                              "type": "string"
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  }
+                },
+                "example": {
+                  "detail": {
+                    "codigo": "NO_AUTENTICADO",
+                    "mensaje": "Sesión requerida"
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "RBAC: rol, propietario o sucursal no autorizado",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "detail": {
+                      "oneOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "codigo": {
+                              "type": "string"
+                            },
+                            "mensaje": {
+                              "type": "string"
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  }
+                },
+                "example": {
+                  "detail": {
+                    "codigo": "FORBIDDEN",
+                    "mensaje": "No autorizado"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Recurso no encontrado",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "detail": {
+                      "oneOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "codigo": {
+                              "type": "string"
+                            },
+                            "mensaje": {
+                              "type": "string"
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  }
+                },
+                "example": {
+                  "detail": {
+                    "codigo": "NO_ENCONTRADO",
+                    "mensaje": "Recurso no encontrado"
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflicto de negocio",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "detail": {
+                      "oneOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "codigo": {
+                              "type": "string"
+                            },
+                            "mensaje": {
+                              "type": "string"
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  }
+                },
+                "example": {
+                  "detail": {
+                    "codigo": "CONFLICTO_NEGOCIO",
+                    "mensaje": "Operación incompatible con el estado"
+                  }
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Proveedor rechazó la operación",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "detail": {
+                      "oneOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "codigo": {
+                              "type": "string"
+                            },
+                            "mensaje": {
+                              "type": "string"
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  }
+                },
+                "example": {
+                  "detail": {
+                    "codigo": "PROVEEDOR_RECHAZO",
+                    "mensaje": "El proveedor rechazó la operación"
                   }
                 }
               }
@@ -19222,39 +20443,22 @@
       "AutorizacionCobroV3DTO": {
         "properties": {
           "consentimiento_id": {
-            "anyOf": [
-              {
-                "type": "string",
-                "format": "uuid"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Consentimiento Id"
+            "type": "string",
+            "format": "uuid",
+            "title": "Consentimiento Id",
+            "description": "UUID inmutable del consentimiento de cobro"
           },
           "aceptado_local_en": {
-            "anyOf": [
-              {
-                "type": "string",
-                "format": "date-time"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Aceptado Local En"
+            "type": "string",
+            "format": "date-time",
+            "title": "Aceptado Local En",
+            "description": "Instante de aceptación local en el dispositivo"
           },
           "huella_compra": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Huella Compra"
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$",
+            "title": "Huella Compra",
+            "description": "Hash SHA-256 canónico de 64 caracteres hex"
           },
           "base_bob": {
             "anyOf": [
@@ -19264,12 +20468,10 @@
               {
                 "type": "string",
                 "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
-              },
-              {
-                "type": "null"
               }
             ],
-            "title": "Base Bob"
+            "title": "Base Bob",
+            "description": "Subtotal base en BOB"
           },
           "descuento_bob": {
             "anyOf": [
@@ -19279,12 +20481,10 @@
               {
                 "type": "string",
                 "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
-              },
-              {
-                "type": "null"
               }
             ],
-            "title": "Descuento Bob"
+            "title": "Descuento Bob",
+            "description": "Descuento aplicado en BOB"
           },
           "envio_bob": {
             "anyOf": [
@@ -19294,12 +20494,10 @@
               {
                 "type": "string",
                 "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
-              },
-              {
-                "type": "null"
               }
             ],
-            "title": "Envio Bob"
+            "title": "Envio Bob",
+            "description": "Costo de envío en BOB"
           },
           "total_bob": {
             "anyOf": [
@@ -19309,25 +20507,16 @@
               {
                 "type": "string",
                 "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
-              },
-              {
-                "type": "null"
               }
             ],
-            "title": "Total Bob"
+            "title": "Total Bob",
+            "description": "Total en BOB"
           },
           "moneda_cobro": {
-            "anyOf": [
-              {
-                "type": "string",
-                "const": "USD"
-              },
-              {
-                "type": "null"
-              }
-            ],
+            "type": "string",
+            "const": "USD",
             "title": "Moneda Cobro",
-            "default": "USD"
+            "description": "Moneda de cobro autorizada obligatoria (USD)"
           },
           "importe_cobro": {
             "anyOf": [
@@ -19337,31 +20526,20 @@
               {
                 "type": "string",
                 "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
-              },
-              {
-                "type": "null"
               }
             ],
-            "title": "Importe Cobro"
+            "title": "Importe Cobro",
+            "description": "Importe total equivalente a cobrar en USD"
           },
           "tasa_id": {
-            "anyOf": [
-              {
-                "type": "string",
-                "format": "uuid"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Tasa Id"
+            "type": "string",
+            "format": "uuid",
+            "title": "Tasa Id",
+            "description": "UUID de la tasa de cambio vigente"
           },
           "tasa_bob_por_usd": {
             "anyOf": [
               {
-                "type": "string"
-              },
-              {
                 "type": "number"
               },
               {
@@ -19369,151 +20547,56 @@
                 "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
               },
               {
-                "type": "null"
+                "type": "string"
               }
             ],
-            "title": "Tasa Bob Por Usd"
+            "title": "Tasa Bob Por Usd",
+            "description": "Tasa de cambio BOB por USD"
           },
           "condiciones_version": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Condiciones Version"
+            "type": "string",
+            "minLength": 1,
+            "title": "Condiciones Version",
+            "description": "Versión de condiciones legales aceptadas"
           },
           "vigente_hasta": {
-            "anyOf": [
-              {
-                "type": "string",
-                "format": "date-time"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Vigente Hasta"
+            "type": "string",
+            "format": "date-time",
+            "title": "Vigente Hasta",
+            "description": "Fin de vigencia del consentimiento"
           },
           "preparacion_pago_id": {
-            "anyOf": [
-              {
-                "type": "string",
-                "format": "uuid"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Preparacion Pago Id"
+            "type": "string",
+            "format": "uuid",
+            "title": "Preparacion Pago Id",
+            "description": "UUID del método de pago preparado"
           },
           "permite_cobro_al_reconectar": {
-            "anyOf": [
-              {
-                "type": "boolean"
-              },
-              {
-                "type": "null"
-              }
-            ],
+            "type": "boolean",
+            "const": true,
             "title": "Permite Cobro Al Reconectar",
-            "default": true
-          },
-          "consentimiento": {
-            "anyOf": [
-              {
-                "type": "boolean"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Consentimiento"
-          },
-          "metodo_preparado_id": {
-            "anyOf": [
-              {
-                "type": "string",
-                "format": "uuid"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Metodo Preparado Id"
-          },
-          "huella_dispositivo": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Huella Dispositivo"
-          },
-          "importe_bob": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "string",
-                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Importe Bob"
-          },
-          "importe_usd": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "string",
-                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Importe Usd"
-          },
-          "tasa": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "string",
-                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Tasa"
-          },
-          "vigencia_hasta": {
-            "anyOf": [
-              {
-                "type": "string",
-                "format": "date-time"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Vigencia Hasta"
+            "description": "Consentimiento explícito obligatorio true"
           }
         },
+        "additionalProperties": false,
         "type": "object",
+        "required": [
+          "consentimiento_id",
+          "aceptado_local_en",
+          "huella_compra",
+          "base_bob",
+          "descuento_bob",
+          "envio_bob",
+          "total_bob",
+          "moneda_cobro",
+          "importe_cobro",
+          "tasa_id",
+          "tasa_bob_por_usd",
+          "condiciones_version",
+          "vigente_hasta",
+          "preparacion_pago_id",
+          "permite_cobro_al_reconectar"
+        ],
         "title": "AutorizacionCobroV3DTO"
       },
       "AutorizacionCrearDTO": {
@@ -23727,6 +24810,59 @@
         ],
         "title": "LineaOriginalCambioDTO"
       },
+      "LineaRecuperadaCajaDTO": {
+        "properties": {
+          "variante_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Variante Id"
+          },
+          "cantidad": {
+            "type": "integer",
+            "title": "Cantidad"
+          },
+          "precio_unitario_bob": {
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Precio Unitario Bob"
+          },
+          "descuento_bob": {
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Descuento Bob",
+            "default": "0.00"
+          },
+          "sku": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sku"
+          },
+          "nombre_producto": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nombre Producto"
+          }
+        },
+        "type": "object",
+        "required": [
+          "variante_id",
+          "cantidad",
+          "precio_unitario_bob"
+        ],
+        "title": "LineaRecuperadaCajaDTO"
+      },
       "LineaReemplazoCambioDTO": {
         "properties": {
           "variante_id": {
@@ -24184,6 +25320,24 @@
           "fecha_hora"
         ],
         "title": "MermaDTO"
+      },
+      "MetodoConfirmarDTO": {
+        "properties": {
+          "payment_method_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Payment Method Id",
+            "description": "ID de PaymentMethod retornado por Stripe tras confirmación en cliente"
+          }
+        },
+        "type": "object",
+        "title": "MetodoConfirmarDTO"
       },
       "MetodoPreparadoDTO": {
         "properties": {
@@ -24662,6 +25816,164 @@
           "cantidad"
         ],
         "title": "OperacionLineaDTO"
+      },
+      "OrdenActivaCajaDTO": {
+        "properties": {
+          "orden_pago_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Orden Pago Id"
+          },
+          "venta_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Venta Id"
+          },
+          "stripe_payment_intent_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stripe Payment Intent Id"
+          },
+          "client_secret": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Client Secret"
+          },
+          "monto_bob": {
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Monto Bob"
+          },
+          "monto_usd": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Monto Usd"
+          },
+          "centavos_usd": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Centavos Usd"
+          },
+          "tasa_bob_por_usd": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tasa Bob Por Usd"
+          },
+          "estado_orden": {
+            "type": "string",
+            "title": "Estado Orden"
+          },
+          "estado": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Estado"
+          },
+          "sucursal_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Sucursal Id"
+          },
+          "turno_caja_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Turno Caja Id"
+          },
+          "cliente_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cliente Id"
+          },
+          "procedencia": {
+            "type": "string",
+            "title": "Procedencia",
+            "default": "PRESENCIAL"
+          },
+          "lineas": {
+            "items": {
+              "$ref": "#/components/schemas/LineaRecuperadaCajaDTO"
+            },
+            "type": "array",
+            "title": "Lineas"
+          },
+          "estado_verificacion": {
+            "type": "string",
+            "title": "Estado Verificacion",
+            "default": "VERIFICADO"
+          },
+          "provisional": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provisional",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "orden_pago_id",
+          "venta_id",
+          "monto_bob",
+          "estado_orden",
+          "sucursal_id"
+        ],
+        "title": "OrdenActivaCajaDTO"
       },
       "OrdenPagoCrearDTO": {
         "properties": {
@@ -27680,20 +28992,48 @@
       "ResolverDiferenciaDTO": {
         "properties": {
           "destino_diferencia": {
-            "type": "string",
-            "enum": [
-              "SALDO",
-              "REEMBOLSO",
-              "PAGO_CLIENTE",
-              "SIN_DIFERENCIA"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
             ],
             "title": "Destino Diferencia"
+          },
+          "saldo_bob": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "string",
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Saldo Bob"
+          },
+          "reembolso_bob": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "string",
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reembolso Bob"
           }
         },
         "type": "object",
-        "required": [
-          "destino_diferencia"
-        ],
         "title": "ResolverDiferenciaDTO"
       },
       "ResultadoOperacionDTO": {
@@ -30960,8 +32300,68 @@
         ],
         "title": "VentaPresencialCrearDTO"
       },
+      "VentaPresencialIniciarStripeDTO": {
+        "properties": {
+          "sucursal_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Sucursal Id"
+          },
+          "lineas": {
+            "items": {
+              "$ref": "#/components/schemas/LineaVentaPresencialDTO"
+            },
+            "type": "array",
+            "minItems": 1,
+            "title": "Lineas",
+            "description": "Al menos un ítem a vender"
+          },
+          "cliente_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cliente Id"
+          },
+          "turno_caja_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Turno Caja Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "sucursal_id",
+          "lineas"
+        ],
+        "title": "VentaPresencialIniciarStripeDTO"
+      },
       "VentaPresencialLiquidarDTO": {
         "properties": {
+          "venta_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Venta Id"
+          },
           "sucursal_id": {
             "type": "string",
             "format": "uuid",
@@ -31027,6 +32427,18 @@
             ],
             "title": "Saldo Aplicado Bob"
           },
+          "orden_pago_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Orden Pago Id"
+          },
           "stripe_payment_intent_id": {
             "anyOf": [
               {
@@ -31058,6 +32470,70 @@
           "medio_pago"
         ],
         "title": "VentaPresencialLiquidarDTO"
+      },
+      "VentaPresencialStripeIniciadaDTO": {
+        "properties": {
+          "venta_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Venta Id"
+          },
+          "orden_pago_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Orden Pago Id"
+          },
+          "stripe_payment_intent_id": {
+            "type": "string",
+            "title": "Stripe Payment Intent Id"
+          },
+          "client_secret": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Client Secret"
+          },
+          "monto_bob": {
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Monto Bob"
+          },
+          "monto_usd": {
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Monto Usd"
+          },
+          "centavos_usd": {
+            "type": "integer",
+            "title": "Centavos Usd"
+          },
+          "tasa_bob_por_usd": {
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Tasa Bob Por Usd"
+          },
+          "estado_orden": {
+            "type": "string",
+            "title": "Estado Orden",
+            "default": "PENDIENTE"
+          }
+        },
+        "type": "object",
+        "required": [
+          "venta_id",
+          "orden_pago_id",
+          "stripe_payment_intent_id",
+          "monto_bob",
+          "monto_usd",
+          "centavos_usd",
+          "tasa_bob_por_usd"
+        ],
+        "title": "VentaPresencialStripeIniciadaDTO"
       },
       "VentaSucursalItemDTO": {
         "properties": {
@@ -31309,6 +32785,71 @@
           "ticket_promedio"
         ],
         "title": "VentasSucursalResumenDTO"
+      },
+      "WebPushConfigDTO": {
+        "properties": {
+          "public_key": {
+            "type": "string",
+            "title": "Public Key",
+            "description": "Clave pública VAPID en base64url para PushManager.subscribe"
+          }
+        },
+        "type": "object",
+        "required": [
+          "public_key"
+        ],
+        "title": "WebPushConfigDTO"
+      },
+      "WebPushKeysDTO": {
+        "properties": {
+          "p256dh": {
+            "type": "string",
+            "title": "P256Dh",
+            "description": "Clave pública P-256 del cliente en base64url"
+          },
+          "auth": {
+            "type": "string",
+            "title": "Auth",
+            "description": "Secret de autenticación en base64url"
+          }
+        },
+        "type": "object",
+        "required": [
+          "p256dh",
+          "auth"
+        ],
+        "title": "WebPushKeysDTO"
+      },
+      "WebPushSubscripcionDTO": {
+        "properties": {
+          "endpoint": {
+            "type": "string",
+            "title": "Endpoint",
+            "description": "Endpoint HTTPS de recepción Web Push"
+          },
+          "keys": {
+            "$ref": "#/components/schemas/WebPushKeysDTO"
+          },
+          "dispositivo_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dispositivo Id",
+            "description": "UUID local de dispositivo si ya existe"
+          }
+        },
+        "type": "object",
+        "required": [
+          "endpoint",
+          "keys"
+        ],
+        "title": "WebPushSubscripcionDTO"
       }
     },
     "securitySchemes": {

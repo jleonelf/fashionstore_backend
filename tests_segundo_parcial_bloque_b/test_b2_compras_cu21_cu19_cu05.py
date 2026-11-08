@@ -22,11 +22,13 @@ import hashlib
 import json
 import time
 import uuid
+import asyncio
 from decimal import Decimal
 from datetime import datetime, timezone, timedelta
 
 import pytest
-from sqlalchemy import select
+from httpx import ASGITransport, AsyncClient
+from sqlalchemy import select, text
 
 from backend.app.core.config import settings
 from backend.app.core.modules.inventario.models import InventarioSucursal, MovimientoInventario
@@ -36,7 +38,7 @@ from backend.app.core.modules.reservas_traslados.schemas_sincronizacion import (
     OperacionDatosCompraDTO,
     OperacionLineaDTO,
 )
-from backend.app.core.modules.reservas_traslados.services.sincronizacion_service import SincronizacionService
+from backend.app.core.modules.reservas_traslados.services.sincronizacion_service import SincronizacionService, calcular_huella_compra_canonica
 from backend.app.core.modules.ventas_pagos.models import DetalleVenta, Pago, Venta
 from backend.app.core.modules.ventas_pagos.models_ordenes import MetodoPreparado, OrdenPago
 from backend.app.core.modules.ventas_pagos.integraciones.stripe_gateway import (
@@ -51,7 +53,7 @@ from backend.app.core.modules.ventas_pagos.services.pedido_service import (
     PedidoCompra,
     ObligacionReembolso,
 )
-from .conftest import T0, RelojControlable
+from .conftest import T0, RelojControlable, app
 
 
 @pytest.fixture(autouse=True)
@@ -208,6 +210,46 @@ async def test_cu21_checkout_crea_pedido_durable_con_oferta_versionada(
     )
     assert resp_reintento.status_code == 200 or resp_reintento.status_code == 201
     assert resp_reintento.json()["pedido_id"] == pedido["pedido_id"]
+
+
+@pytest.mark.asyncio
+async def test_cu21_checkout_concurrente_misma_clave_retorna_mismo_pedido(
+    http, escenario
+):
+    """El mismo checkout simultÃ¡neo no duplica pedidos ni filtra errores SQL."""
+    http.usar(escenario.usuario_a)
+    await http.cliente.post(
+        "/api/v1/carritos/mio/lineas",
+        json={"variante_id": str(escenario.variante_a_id), "cantidad": 1},
+    )
+
+    clave = str(uuid.uuid4())
+    barrera = asyncio.Event()
+    carga = {
+        "sucursal_id": str(escenario.sucursal_a_id),
+        "modalidad": "RECOJO",
+    }
+
+    async def checkout(cliente: AsyncClient):
+        await barrera.wait()
+        return await cliente.post(
+            "/api/v1/carritos/mio/checkout",
+            json=carga,
+            headers={"Idempotency-Key": clave},
+        )
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://pruebas"
+    ) as segundo_cliente:
+        primero = asyncio.create_task(checkout(http.cliente))
+        segundo = asyncio.create_task(checkout(segundo_cliente))
+        await asyncio.sleep(0.02)
+        barrera.set()
+        resp_a, resp_b = await asyncio.gather(primero, segundo)
+
+    assert resp_a.status_code in (200, 201), resp_a.text
+    assert resp_b.status_code in (200, 201), resp_b.text
+    assert resp_a.json()["pedido_id"] == resp_b.json()["pedido_id"]
 
 
 @pytest.mark.asyncio
@@ -414,12 +456,39 @@ async def test_cu05_solicitar_compra_v3_con_stock_exito(http, escenario, fabrica
             proveedor="STRIPE",
             cliente_proveedor_cifrado=b"cus_test",
             metodo_proveedor_cifrado=b"pm_test",
+            preparacion_proveedor_cifrado=b"seti_test",
             estado="LISTO",
         )
         db.add(mp)
+        r_t = await db.execute(select(text("id, tasa_bob_por_usd FROM plataforma.tasas_cambio ORDER BY vigente_desde DESC LIMIT 1")))
+        f_t = r_t.first()
+        tasa_id = f_t[0] if f_t else uuid.uuid4()
+        tasa_val = Decimal(str(f_t[1])) if f_t else Decimal("6.96")
         await db.commit()
 
-    # Operación SOLICITAR_COMPRA con autorización de cobro exacta
+    cid = uuid.uuid4()
+    usd_cobro = (Decimal("100.00") / tasa_val).quantize(Decimal("0.01"))
+    expira_en_calc = ahora_local + timedelta(hours=24)
+    huella = calcular_huella_compra_canonica(
+        empresa_id=escenario.empresa_a_id,
+        usuario_id=escenario.usuario_a.id,
+        sucursal_id=escenario.sucursal_a_id,
+        modalidad="RECOJO",
+        direccion=None,
+        lineas=[{"variante_id": str(escenario.variante_a_id), "cantidad": 1, "precio_unitario_bob": "100.00"}],
+        base_bob=Decimal("100.00"),
+        descuento_bob=Decimal("0.00"),
+        envio_bob=Decimal("0.00"),
+        total_bob=Decimal("100.00"),
+        moneda_cobro="USD",
+        importe_cobro=usd_cobro,
+        tasa_id=tasa_id,
+        tasa_bob_por_usd=tasa_val,
+        condiciones_version="v3",
+        vigente_hasta=expira_en_calc,
+    )
+
+    # Operación SOLICITAR_COMPRA con autorización de cobro exacta de 15 campos contractuales
     datos_compra = {
         "sucursal_id": str(escenario.sucursal_a_id),
         "modalidad": "RECOJO",
@@ -430,10 +499,21 @@ async def test_cu05_solicitar_compra_v3_con_stock_exito(http, escenario, fabrica
             }
         ],
         "autorizacion_cobro": {
-            "consentimiento": True,
-            "metodo_preparado_id": str(metodo_prep_id),
-            "importe_bob": 100.0,
+            "consentimiento_id": str(cid),
+            "aceptado_local_en": ahora_local.isoformat(),
+            "huella_compra": huella,
+            "base_bob": "100.00",
+            "descuento_bob": "0.00",
+            "envio_bob": "0.00",
+            "total_bob": "100.00",
             "moneda_cobro": "USD",
+            "importe_cobro": str(usd_cobro),
+            "tasa_id": str(tasa_id),
+            "tasa_bob_por_usd": str(tasa_val),
+            "condiciones_version": "v3",
+            "vigente_hasta": (ahora_local + timedelta(hours=24)).isoformat(),
+            "preparacion_pago_id": str(metodo_prep_id),
+            "permite_cobro_al_reconectar": True,
         },
     }
 
@@ -502,10 +582,37 @@ async def test_cu05_solicitar_compra_v3_sin_stock_deriva_reembolso_cu27(
             proveedor="STRIPE",
             cliente_proveedor_cifrado=b"cus_test",
             metodo_proveedor_cifrado=b"pm_test",
+            preparacion_proveedor_cifrado=b"seti_test",
             estado="LISTO",
         )
         db.add(mp)
+        r_t = await db.execute(select(text("id, tasa_bob_por_usd FROM plataforma.tasas_cambio ORDER BY vigente_desde DESC LIMIT 1")))
+        f_t = r_t.first()
+        tasa_id = f_t[0] if f_t else uuid.uuid4()
+        tasa_val = Decimal(str(f_t[1])) if f_t else Decimal("6.96")
         await db.commit()
+
+    cid = uuid.uuid4()
+    usd_cobro = (Decimal("100.00") / tasa_val).quantize(Decimal("0.01"))
+    expira_en_calc = ahora_local + timedelta(hours=24)
+    huella = calcular_huella_compra_canonica(
+        empresa_id=escenario.empresa_a_id,
+        usuario_id=escenario.usuario_a.id,
+        sucursal_id=escenario.sucursal_a_id,
+        modalidad="RECOJO",
+        direccion=None,
+        lineas=[{"variante_id": str(escenario.variante_sin_stock_id), "cantidad": 1, "precio_unitario_bob": "100.00"}],
+        base_bob=Decimal("100.00"),
+        descuento_bob=Decimal("0.00"),
+        envio_bob=Decimal("0.00"),
+        total_bob=Decimal("100.00"),
+        moneda_cobro="USD",
+        importe_cobro=usd_cobro,
+        tasa_id=tasa_id,
+        tasa_bob_por_usd=tasa_val,
+        condiciones_version="v3",
+        vigente_hasta=expira_en_calc,
+    )
 
     op_payload = {
         "version_esquema": 3,
@@ -527,10 +634,21 @@ async def test_cu05_solicitar_compra_v3_sin_stock_deriva_reembolso_cu27(
                 }
             ],
             "autorizacion_cobro": {
-                "consentimiento": True,
-                "metodo_preparado_id": str(metodo_prep_id),
-                "importe_bob": 100.0,
+                "consentimiento_id": str(cid),
+                "aceptado_local_en": ahora_local.isoformat(),
+                "huella_compra": huella,
+                "base_bob": "100.00",
+                "descuento_bob": "0.00",
+                "envio_bob": "0.00",
+                "total_bob": "100.00",
                 "moneda_cobro": "USD",
+                "importe_cobro": str(usd_cobro),
+                "tasa_id": str(tasa_id),
+                "tasa_bob_por_usd": str(tasa_val),
+                "condiciones_version": "v3",
+                "vigente_hasta": (ahora_local + timedelta(hours=24)).isoformat(),
+                "preparacion_pago_id": str(metodo_prep_id),
+                "permite_cobro_al_reconectar": True,
             },
         },
     }
@@ -588,10 +706,37 @@ async def test_cu05_solicitar_compra_v3_sin_captura_nunca_pasa_a_pagado(
                 proveedor="STRIPE",
                 cliente_proveedor_cifrado=b"cus_test",
                 metodo_proveedor_cifrado=b"pm_test",
+                preparacion_proveedor_cifrado=b"seti_test",
                 estado="LISTO",
             )
             db.add(mp)
+            r_t = await db.execute(select(text("id, tasa_bob_por_usd FROM plataforma.tasas_cambio ORDER BY vigente_desde DESC LIMIT 1")))
+            f_t = r_t.first()
+            tasa_id = f_t[0] if f_t else uuid.uuid4()
+            tasa_val = Decimal(str(f_t[1])) if f_t else Decimal("6.96")
             await db.commit()
+
+        cid = uuid.uuid4()
+        usd_cobro = (Decimal("100.00") / tasa_val).quantize(Decimal("0.01"))
+        expira_en_calc = ahora_local + timedelta(hours=24)
+        huella = calcular_huella_compra_canonica(
+            empresa_id=escenario.empresa_a_id,
+            usuario_id=escenario.usuario_a.id,
+            sucursal_id=escenario.sucursal_a_id,
+            modalidad="RECOJO",
+            direccion=None,
+            lineas=[{"variante_id": str(escenario.variante_a_id), "cantidad": 1, "precio_unitario_bob": "100.00"}],
+            base_bob=Decimal("100.00"),
+            descuento_bob=Decimal("0.00"),
+            envio_bob=Decimal("0.00"),
+            total_bob=Decimal("100.00"),
+            moneda_cobro="USD",
+            importe_cobro=usd_cobro,
+            tasa_id=tasa_id,
+            tasa_bob_por_usd=tasa_val,
+            condiciones_version="v3",
+            vigente_hasta=expira_en_calc,
+        )
 
         op_payload = {
             "version_esquema": 3,
@@ -608,10 +753,21 @@ async def test_cu05_solicitar_compra_v3_sin_captura_nunca_pasa_a_pagado(
                 "modalidad": "RECOJO",
                 "lineas": [{"variante_id": str(escenario.variante_a_id), "cantidad": 1}],
                 "autorizacion_cobro": {
-                    "consentimiento": True,
-                    "metodo_preparado_id": str(metodo_prep_id),
-                    "importe_bob": 100.0,
+                    "consentimiento_id": str(cid),
+                    "aceptado_local_en": ahora_local.isoformat(),
+                    "huella_compra": huella,
+                    "base_bob": "100.00",
+                    "descuento_bob": "0.00",
+                    "envio_bob": "0.00",
+                    "total_bob": "100.00",
                     "moneda_cobro": "USD",
+                    "importe_cobro": str(usd_cobro),
+                    "tasa_id": str(tasa_id),
+                    "tasa_bob_por_usd": str(tasa_val),
+                    "condiciones_version": "v3",
+                    "vigente_hasta": (ahora_local + timedelta(hours=24)).isoformat(),
+                    "preparacion_pago_id": str(metodo_prep_id),
+                    "permite_cobro_al_reconectar": True,
                 },
             },
         }
@@ -743,10 +899,37 @@ async def test_cu05_solicitar_compra_v3_webhook_repetido_no_duplica_cargo_ni_asi
                 proveedor="STRIPE",
                 cliente_proveedor_cifrado=b"cus_test",
                 metodo_proveedor_cifrado=b"pm_test",
+                preparacion_proveedor_cifrado=b"seti_test",
                 estado="LISTO",
             )
             db.add(mp)
+            r_t = await db.execute(select(text("id, tasa_bob_por_usd FROM plataforma.tasas_cambio ORDER BY vigente_desde DESC LIMIT 1")))
+            f_t = r_t.first()
+            tasa_id = f_t[0] if f_t else uuid.uuid4()
+            tasa_val = Decimal(str(f_t[1])) if f_t else Decimal("6.96")
             await db.commit()
+
+        cid = uuid.uuid4()
+        usd_cobro = (Decimal("100.00") / tasa_val).quantize(Decimal("0.01"))
+        expira_en_calc = ahora_local + timedelta(hours=24)
+        huella = calcular_huella_compra_canonica(
+            empresa_id=escenario.empresa_a_id,
+            usuario_id=escenario.usuario_a.id,
+            sucursal_id=escenario.sucursal_a_id,
+            modalidad="RECOJO",
+            direccion=None,
+            lineas=[{"variante_id": str(escenario.variante_a_id), "cantidad": 1, "precio_unitario_bob": "100.00"}],
+            base_bob=Decimal("100.00"),
+            descuento_bob=Decimal("0.00"),
+            envio_bob=Decimal("0.00"),
+            total_bob=Decimal("100.00"),
+            moneda_cobro="USD",
+            importe_cobro=usd_cobro,
+            tasa_id=tasa_id,
+            tasa_bob_por_usd=tasa_val,
+            condiciones_version="v3",
+            vigente_hasta=expira_en_calc,
+        )
 
         op_payload = {
             "version_esquema": 3,
@@ -763,10 +946,21 @@ async def test_cu05_solicitar_compra_v3_webhook_repetido_no_duplica_cargo_ni_asi
                 "modalidad": "RECOJO",
                 "lineas": [{"variante_id": str(escenario.variante_a_id), "cantidad": 1}],
                 "autorizacion_cobro": {
-                    "consentimiento": True,
-                    "metodo_preparado_id": str(metodo_prep_id),
-                    "importe_bob": 100.0,
+                    "consentimiento_id": str(cid),
+                    "aceptado_local_en": ahora_local.isoformat(),
+                    "huella_compra": huella,
+                    "base_bob": "100.00",
+                    "descuento_bob": "0.00",
+                    "envio_bob": "0.00",
+                    "total_bob": "100.00",
                     "moneda_cobro": "USD",
+                    "importe_cobro": str(usd_cobro),
+                    "tasa_id": str(tasa_id),
+                    "tasa_bob_por_usd": str(tasa_val),
+                    "condiciones_version": "v3",
+                    "vigente_hasta": (ahora_local + timedelta(hours=24)).isoformat(),
+                    "preparacion_pago_id": str(metodo_prep_id),
+                    "permite_cobro_al_reconectar": True,
                 },
             },
         }
@@ -797,7 +991,17 @@ async def test_cu05_solicitar_compra_v3_webhook_repetido_no_duplica_cargo_ni_asi
         cuerpo_webhook = json.dumps({
             "id": f"evt_test_{uuid.uuid4().hex[:6]}",
             "type": "payment_intent.succeeded",
-            "data": {"object": {"id": pi_id}},
+            "data": {
+                "object": {
+                    "id": pi_id,
+                    "amount": ord_pago.centavos_usd,
+                    "currency": "usd",
+                    "metadata": {
+                        "empresa_id": str(ord_pago.empresa_id),
+                        "pedido_id": str(pedido_id),
+                    },
+                }
+            },
         }).encode("utf-8")
         ts = int(time.time())
         firma = generar_firma_stripe(cuerpo_webhook, settings.STRIPE_WEBHOOK_SECRET or "whsec_test", ts)
@@ -851,7 +1055,7 @@ async def test_cu05_solicitar_compra_v3_webhook_repetido_no_duplica_cargo_ni_asi
 
 
 @pytest.mark.asyncio
-async def test_cu05_solicitar_compra_cambio_precio_requiere_nueva_aceptacion(http, escenario):
+async def test_cu05_solicitar_compra_cambio_precio_requiere_nueva_aceptacion(http, escenario, fabrica_sesiones):
     """CU05: Diferencia en precio central vs visto offline da REQUIERE_NUEVA_ACEPTACION."""
     http.usar(escenario.usuario_a)
 
@@ -859,6 +1063,29 @@ async def test_cu05_solicitar_compra_cambio_precio_requiere_nueva_aceptacion(htt
     resp_ref = await http.cliente.get(f"/api/v1/sincronizacion/referencia-horaria?dispositivo_id={disp_id}")
     ref_id = resp_ref.json()["referencia_horaria_id"]
     ahora_local = datetime.now(timezone.utc)
+    metodo_prep_id = uuid.uuid4()
+
+    async with fabrica_sesiones() as db:
+        mp = MetodoPreparado(
+            id=metodo_prep_id,
+            empresa_id=escenario.empresa_a_id,
+            cliente_id=escenario.usuario_a.id,
+            proveedor="STRIPE",
+            cliente_proveedor_cifrado=b"cus_test",
+            metodo_proveedor_cifrado=b"pm_test",
+            preparacion_proveedor_cifrado=b"seti_test",
+            estado="LISTO",
+        )
+        db.add(mp)
+        r_t = await db.execute(select(text("id, tasa_bob_por_usd FROM plataforma.tasas_cambio ORDER BY vigente_desde DESC LIMIT 1")))
+        f_t = r_t.first()
+        tasa_id = f_t[0] if f_t else uuid.uuid4()
+        tasa_val = Decimal(str(f_t[1])) if f_t else Decimal("6.96")
+        await db.commit()
+
+    cid = uuid.uuid4()
+    usd_cobro = (Decimal("80.00") / tasa_val).quantize(Decimal("0.01"))
+    huella = hashlib.sha256(f"{cid}:80.00:USD:{metodo_prep_id}".encode("utf-8")).hexdigest()
 
     op_payload = {
         "version_esquema": 3,
@@ -875,10 +1102,21 @@ async def test_cu05_solicitar_compra_cambio_precio_requiere_nueva_aceptacion(htt
             "modalidad": "RECOJO",
             "lineas": [{"variante_id": str(escenario.variante_a_id), "cantidad": 1}],
             "autorizacion_cobro": {
-                "consentimiento": True,
-                "metodo_preparado_id": str(uuid.uuid4()),
-                "importe_bob": 80.0,  # Central vale 100.00
+                "consentimiento_id": str(cid),
+                "aceptado_local_en": ahora_local.isoformat(),
+                "huella_compra": huella,
+                "base_bob": "80.00",
+                "descuento_bob": "0.00",
+                "envio_bob": "0.00",
+                "total_bob": "80.00",
                 "moneda_cobro": "USD",
+                "importe_cobro": str(usd_cobro),
+                "tasa_id": str(tasa_id),
+                "tasa_bob_por_usd": str(tasa_val),
+                "condiciones_version": "v3",
+                "vigente_hasta": (ahora_local + timedelta(hours=24)).isoformat(),
+                "preparacion_pago_id": str(metodo_prep_id),
+                "permite_cobro_al_reconectar": True,
             },
         },
     }
@@ -892,7 +1130,8 @@ async def test_cu05_solicitar_compra_cambio_precio_requiere_nueva_aceptacion(htt
 
 @pytest.mark.asyncio
 async def test_cu05_solicitar_compra_falta_consentimiento_da_pendiente_intervencion(http, escenario):
-    """CU05: Sin consentimiento explícito o sin método preparado da PENDIENTE_INTERVENCION."""
+    """CU05: Sin consentimiento explícito o sin método preparado se omite autorizacion_cobro y da PENDIENTE_INTERVENCION;
+    si se envía un objeto parcial presente, devuelve 422 Unprocessable Entity según contrato v3."""
     http.usar(escenario.usuario_a)
 
     disp_id = uuid.uuid4()
@@ -900,7 +1139,8 @@ async def test_cu05_solicitar_compra_falta_consentimiento_da_pendiente_intervenc
     ref_id = resp_ref.json()["referencia_horaria_id"]
     ahora_local = datetime.now(timezone.utc)
 
-    op_payload = {
+    # Caso A: Objeto autorizacion_cobro omitido -> Solicitud guardada sin cobro en PENDIENTE_INTERVENCION
+    op_payload_sin_cobro = {
         "version_esquema": 3,
         "operacion_id": str(uuid.uuid4()),
         "tipo": "SOLICITAR_COMPRA",
@@ -914,16 +1154,39 @@ async def test_cu05_solicitar_compra_falta_consentimiento_da_pendiente_intervenc
             "sucursal_id": str(escenario.sucursal_a_id),
             "modalidad": "RECOJO",
             "lineas": [{"variante_id": str(escenario.variante_a_id), "cantidad": 1}],
+            # autorizacion_cobro omitida
+        },
+    }
+
+    resp = await http.cliente.post("/api/v1/sincronizacion/operaciones", json=op_payload_sin_cobro)
+    assert resp.status_code == 200, resp.text
+    res = resp.json()
+    assert res["estado"] == "PENDIENTE_INTERVENCION"
+    assert res["codigo"] == "AUTORIZACION_REQUERIDA"
+
+    # Caso B: Objeto autorizacion_cobro presente pero parcial/inválido -> Rechazo estricto HTTP 422
+    op_payload_invalido = {
+        "version_esquema": 3,
+        "operacion_id": str(uuid.uuid4()),
+        "tipo": "SOLICITAR_COMPRA",
+        "creada_local_en": ahora_local.isoformat(),
+        "empresa_id": str(escenario.empresa_a_id),
+        "usuario_id": str(escenario.usuario_a.id),
+        "dispositivo_id": str(disp_id),
+        "secuencia_local": 32,
+        "referencia_horaria_id": str(ref_id),
+        "datos": {
+            "sucursal_id": str(escenario.sucursal_a_id),
+            "modalidad": "RECOJO",
+            "lineas": [{"variante_id": str(escenario.variante_a_id), "cantidad": 1}],
             "autorizacion_cobro": {
                 "consentimiento": False,
             },
         },
     }
 
-    resp = await http.cliente.post("/api/v1/sincronizacion/operaciones", json=op_payload)
-    assert resp.status_code == 200, resp.text
-    res = resp.json()
-    assert res["estado"] == "PENDIENTE_INTERVENCION"
+    resp_inv = await http.cliente.post("/api/v1/sincronizacion/operaciones", json=op_payload_invalido)
+    assert resp_inv.status_code == 422, resp_inv.text
 
 
 @pytest.mark.asyncio
@@ -949,10 +1212,37 @@ async def test_cu05_solicitar_compra_simular_3ds_da_requiere_accion_cliente(
                 proveedor="STRIPE",
                 cliente_proveedor_cifrado=b"cus_test",
                 metodo_proveedor_cifrado=b"pm_test",
+                preparacion_proveedor_cifrado=b"seti_test",
                 estado="LISTO",
             )
             db.add(mp)
+            r_t = await db.execute(select(text("id, tasa_bob_por_usd FROM plataforma.tasas_cambio ORDER BY vigente_desde DESC LIMIT 1")))
+            f_t = r_t.first()
+            tasa_id = f_t[0] if f_t else uuid.uuid4()
+            tasa_val = Decimal(str(f_t[1])) if f_t else Decimal("6.96")
             await db.commit()
+
+        cid = uuid.uuid4()
+        usd_cobro = (Decimal("100.00") / tasa_val).quantize(Decimal("0.01"))
+        expira_en_calc = ahora_local + timedelta(hours=24)
+        huella = calcular_huella_compra_canonica(
+            empresa_id=escenario.empresa_a_id,
+            usuario_id=escenario.usuario_a.id,
+            sucursal_id=escenario.sucursal_a_id,
+            modalidad="RECOJO",
+            direccion=None,
+            lineas=[{"variante_id": str(escenario.variante_a_id), "cantidad": 1, "precio_unitario_bob": "100.00"}],
+            base_bob=Decimal("100.00"),
+            descuento_bob=Decimal("0.00"),
+            envio_bob=Decimal("0.00"),
+            total_bob=Decimal("100.00"),
+            moneda_cobro="USD",
+            importe_cobro=usd_cobro,
+            tasa_id=tasa_id,
+            tasa_bob_por_usd=tasa_val,
+            condiciones_version="v3",
+            vigente_hasta=expira_en_calc,
+        )
 
         op_payload = {
             "version_esquema": 3,
@@ -969,10 +1259,21 @@ async def test_cu05_solicitar_compra_simular_3ds_da_requiere_accion_cliente(
                 "modalidad": "RECOJO",
                 "lineas": [{"variante_id": str(escenario.variante_a_id), "cantidad": 1}],
                 "autorizacion_cobro": {
-                    "consentimiento": True,
-                    "metodo_preparado_id": str(metodo_prep_id),
-                    "importe_bob": 100.0,
+                    "consentimiento_id": str(cid),
+                    "aceptado_local_en": ahora_local.isoformat(),
+                    "huella_compra": huella,
+                    "base_bob": "100.00",
+                    "descuento_bob": "0.00",
+                    "envio_bob": "0.00",
+                    "total_bob": "100.00",
                     "moneda_cobro": "USD",
+                    "importe_cobro": str(usd_cobro),
+                    "tasa_id": str(tasa_id),
+                    "tasa_bob_por_usd": str(tasa_val),
+                    "condiciones_version": "v3",
+                    "vigente_hasta": (ahora_local + timedelta(hours=24)).isoformat(),
+                    "preparacion_pago_id": str(metodo_prep_id),
+                    "permite_cobro_al_reconectar": True,
                 },
             },
         }
@@ -984,3 +1285,232 @@ async def test_cu05_solicitar_compra_simular_3ds_da_requiere_accion_cliente(
         assert res["codigo"] == "ACCION_CLIENTE_REQUERIDA"
     finally:
         configurar_fake_stripe.simular_requiere_accion = False
+
+
+@pytest.mark.asyncio
+async def test_huella_compra_canonica_vectores_publicos_y_sensibilidad():
+    """P1 Auditoría 23: Verifica vectores canónicos públicos e invariantes de huella."""
+    from datetime import datetime, timezone
+    # Vector 1 (RECOJO)
+    h1 = calcular_huella_compra_canonica(
+        empresa_id=uuid.UUID("11111111-1111-1111-1111-111111111111"),
+        usuario_id=uuid.UUID("55555555-5555-5555-5555-555555555555"),
+        sucursal_id=uuid.UUID("33333333-3333-3333-3333-333333333333"),
+        modalidad="RECOJO",
+        direccion=None,
+        lineas=[{"variante_id": "22222222-2222-2222-2222-222222222222", "cantidad": 1, "precio_unitario_bob": "100.00"}],
+        base_bob=Decimal("100.00"),
+        descuento_bob=Decimal("0.00"),
+        envio_bob=Decimal("0.00"),
+        total_bob=Decimal("100.00"),
+        moneda_cobro="USD",
+        importe_cobro=Decimal("14.37"),
+        tasa_id=uuid.UUID("44444444-4444-4444-4444-444444444444"),
+        tasa_bob_por_usd=Decimal("6.96"),
+        condiciones_version="v3",
+        vigente_hasta=datetime(2026, 11, 6, 15, 0, 0, tzinfo=timezone.utc),
+    )
+    assert h1 == "5249e0cea418ec6262f9f0ef7a71686d2d6cecf8c4083dafe77aa0d24c3eacee"
+
+    # Vector 2 (DELIVERY con dirección y espacios a colapsar)
+    h2 = calcular_huella_compra_canonica(
+        empresa_id=uuid.UUID("11111111-1111-1111-1111-111111111111"),
+        usuario_id=uuid.UUID("55555555-5555-5555-5555-555555555555"),
+        sucursal_id=uuid.UUID("33333333-3333-3333-3333-333333333333"),
+        modalidad="DELIVERY",
+        direccion="  Av.  Las   Americas  123 ",
+        lineas=[{"variante_id": "22222222-2222-2222-2222-222222222222", "cantidad": 1, "precio_unitario_bob": "100.00"}],
+        base_bob=Decimal("100.00"),
+        descuento_bob=Decimal("0.00"),
+        envio_bob=Decimal("15.00"),
+        total_bob=Decimal("115.00"),
+        moneda_cobro="USD",
+        importe_cobro=Decimal("16.52"),
+        tasa_id=uuid.UUID("44444444-4444-4444-4444-444444444444"),
+        tasa_bob_por_usd=Decimal("6.96"),
+        condiciones_version="v3",
+        vigente_hasta=datetime(2026, 11, 6, 15, 0, 0, tzinfo=timezone.utc),
+    )
+    assert h2 == "b095703bdd526b2a7da5d97f5e52dbe7ec7a118d72511c72b9602cd03fd98f07"
+
+    # Sensibilidad: cambiar cualquier campo produce un hash distinto
+    h_dif_cant = calcular_huella_compra_canonica(
+        empresa_id=uuid.UUID("11111111-1111-1111-1111-111111111111"),
+        usuario_id=uuid.UUID("55555555-5555-5555-5555-555555555555"),
+        sucursal_id=uuid.UUID("33333333-3333-3333-3333-333333333333"),
+        modalidad="RECOJO",
+        direccion=None,
+        lineas=[{"variante_id": "22222222-2222-2222-2222-222222222222", "cantidad": 2, "precio_unitario_bob": "100.00"}],
+        base_bob=Decimal("100.00"),
+        descuento_bob=Decimal("0.00"),
+        envio_bob=Decimal("0.00"),
+        total_bob=Decimal("100.00"),
+        moneda_cobro="USD",
+        importe_cobro=Decimal("14.37"),
+        tasa_id=uuid.UUID("44444444-4444-4444-4444-444444444444"),
+        tasa_bob_por_usd=Decimal("6.96"),
+        condiciones_version="v3",
+        vigente_hasta=datetime(2026, 11, 6, 15, 0, 0, tzinfo=timezone.utc),
+    )
+    assert h_dif_cant != h1
+
+
+# ============================================================================
+# CU05 Auditoría 28: Pruebas estrictas de contrato de autorización offline v3
+# ============================================================================
+
+async def _obtener_referencia_horaria(http, escenario):
+    disp_id = uuid.uuid4()
+    resp = await http.cliente.get(f"/api/v1/sincronizacion/referencia-horaria?dispositivo_id={disp_id}")
+    assert resp.status_code == 200, resp.text
+    return resp.json()["referencia_horaria_id"], disp_id, datetime.now(timezone.utc)
+
+
+@pytest.mark.asyncio
+async def test_cu05_solicitar_compra_v3_extra_fields_rechazados_422(http, escenario):
+    """P0 Auditoría 28: El DTO AutorizacionCobroV3DTO usa extra='forbid'.
+    Campos como 'consentimiento', 'metodo_preparado_id' o 'huella_dispositivo'
+    deben ser rechazados con HTTP 422 por FastAPI."""
+    http.usar(escenario.usuario_a)
+
+    ref_id, disp_id, ahora_local = await _obtener_referencia_horaria(http, escenario)
+
+    op_payload = {
+        "version_esquema": 3,
+        "operacion_id": str(uuid.uuid4()),
+        "secuencia_local": 1,
+        "empresa_id": str(escenario.empresa_a_id),
+        "usuario_id": str(escenario.usuario_a.id),
+        "dispositivo_id": str(disp_id),
+        "tipo": "SOLICITAR_COMPRA",
+        "creada_local_en": ahora_local.isoformat(),
+        "referencia_horaria_id": str(ref_id),
+        "datos": {
+            "sucursal_id": str(escenario.sucursal_a_id),
+            "modalidad": "RECOJO",
+            "lineas": [
+                {
+                    "variante_id": str(escenario.variante_a_id),
+                    "cantidad": 1,
+                    "precio_unitario_bob": "100.00",
+                }
+            ],
+            "autorizacion_cobro": {
+                "consentimiento_id": str(uuid.uuid4()),
+                "aceptado_local_en": ahora_local.isoformat(),
+                "huella_compra": "0" * 64,
+                "base_bob": "100.00",
+                "descuento_bob": "0.00",
+                "envio_bob": "0.00",
+                "total_bob": "100.00",
+                "moneda_cobro": "USD",
+                "importe_cobro": "14.37",
+                "tasa_id": str(uuid.uuid4()),
+                "tasa_bob_por_usd": "6.96",
+                "condiciones_version": "v3",
+                "vigente_hasta": (ahora_local + timedelta(hours=24)).isoformat(),
+                "preparacion_pago_id": str(uuid.uuid4()),
+                "permite_cobro_al_reconectar": True,
+                # Claves prohibidas que la PWA generaba antes de la corrección
+                "consentimiento": True,
+                "metodo_preparado_id": str(uuid.uuid4()),
+                "huella_dispositivo": "dev_test_123",
+            },
+        },
+    }
+
+    resp = await http.cliente.post("/api/v1/sincronizacion/operaciones", json=op_payload)
+    assert resp.status_code == 422, resp.text
+    detalles = str(resp.json())
+    assert "extra_forbidden" in detalles or "extra" in detalles.lower()
+
+
+@pytest.mark.asyncio
+async def test_cu05_solicitar_compra_v3_moneda_ausente_rechazada_422(http, escenario):
+    """P0 Auditoría 28: 'moneda_cobro' es obligatoria en v3 y no debe tener default;
+    su omisión debe provocar HTTP 422."""
+    http.usar(escenario.usuario_a)
+
+    ref_id, disp_id, ahora_local = await _obtener_referencia_horaria(http, escenario)
+
+    op_payload = {
+        "version_esquema": 3,
+        "operacion_id": str(uuid.uuid4()),
+        "secuencia_local": 1,
+        "empresa_id": str(escenario.empresa_a_id),
+        "usuario_id": str(escenario.usuario_a.id),
+        "dispositivo_id": str(disp_id),
+        "tipo": "SOLICITAR_COMPRA",
+        "creada_local_en": ahora_local.isoformat(),
+        "referencia_horaria_id": str(ref_id),
+        "datos": {
+            "sucursal_id": str(escenario.sucursal_a_id),
+            "modalidad": "RECOJO",
+            "lineas": [
+                {
+                    "variante_id": str(escenario.variante_a_id),
+                    "cantidad": 1,
+                    "precio_unitario_bob": "100.00",
+                }
+            ],
+            "autorizacion_cobro": {
+                "consentimiento_id": str(uuid.uuid4()),
+                "aceptado_local_en": ahora_local.isoformat(),
+                "huella_compra": "0" * 64,
+                "base_bob": "100.00",
+                "descuento_bob": "0.00",
+                "envio_bob": "0.00",
+                "total_bob": "100.00",
+                # 'moneda_cobro' omitida intencionalmente
+                "importe_cobro": "14.37",
+                "tasa_id": str(uuid.uuid4()),
+                "tasa_bob_por_usd": "6.96",
+                "condiciones_version": "v3",
+                "vigente_hasta": (ahora_local + timedelta(hours=24)).isoformat(),
+                "preparacion_pago_id": str(uuid.uuid4()),
+                "permite_cobro_al_reconectar": True,
+            },
+        },
+    }
+
+    resp = await http.cliente.post("/api/v1/sincronizacion/operaciones", json=op_payload)
+    assert resp.status_code == 422, resp.text
+
+
+@pytest.mark.asyncio
+async def test_cu05_solicitar_compra_v3_omision_autorizacion_persiste_pendiente_intervencion(http, escenario):
+    """P0 Auditoría 28: Sin autorización (o con autorizacion_cobro null), se encola
+    v3 y persiste PENDIENTE_INTERVENCION sin cobrar nada."""
+    http.usar(escenario.usuario_a)
+
+    ref_id, disp_id, ahora_local = await _obtener_referencia_horaria(http, escenario)
+
+    op_payload = {
+        "version_esquema": 3,
+        "operacion_id": str(uuid.uuid4()),
+        "secuencia_local": 1,
+        "empresa_id": str(escenario.empresa_a_id),
+        "usuario_id": str(escenario.usuario_a.id),
+        "dispositivo_id": str(disp_id),
+        "tipo": "SOLICITAR_COMPRA",
+        "creada_local_en": ahora_local.isoformat(),
+        "referencia_horaria_id": str(ref_id),
+        "datos": {
+            "sucursal_id": str(escenario.sucursal_a_id),
+            "modalidad": "RECOJO",
+            "lineas": [
+                {
+                    "variante_id": str(escenario.variante_a_id),
+                    "cantidad": 1,
+                    "precio_unitario_bob": "100.00",
+                }
+            ],
+            "autorizacion_cobro": None,
+        },
+    }
+
+    resp = await http.cliente.post("/api/v1/sincronizacion/operaciones", json=op_payload)
+    assert resp.status_code == 200, resp.text
+    res = resp.json()
+    assert res["estado"] == "PENDIENTE_INTERVENCION"
+    assert res["codigo"] == "AUTORIZACION_REQUERIDA"

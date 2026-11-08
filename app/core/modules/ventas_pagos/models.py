@@ -14,6 +14,7 @@ from sqlalchemy import (
     UniqueConstraint,
     CheckConstraint,
     Index,
+    text,
 )
 from sqlalchemy.dialects.postgresql import UUID, ENUM, JSONB
 from sqlalchemy.orm import relationship
@@ -139,6 +140,12 @@ class Pago(Base):
             name="ck_pagos_metodo",
         ),
         CheckConstraint("monto > 0", name="ck_pagos_monto_pos"),
+        Index(
+            "uq_pagos_empresa_prov_ref",
+            "empresa_id", "proveedor_pago", "referencia_externa",
+            unique=True,
+            postgresql_where=text("referencia_externa IS NOT NULL"),
+        ),
         {"schema": "comercial"},
     )
 

@@ -366,7 +366,7 @@ async def test_cu22_01_preparar_metodo_setup_intent_y_consultar(http, escenario)
     assert resp.status_code == 201, resp.text
     data = resp.json()
     assert "preparacion_pago_id" in data
-    assert data["estado"] == "LISTO"
+    assert data["estado"] == "PENDIENTE"
     assert data["client_secret"].startswith("seti_test_")
 
     prep_id = data["preparacion_pago_id"]
@@ -374,7 +374,12 @@ async def test_cu22_01_preparar_metodo_setup_intent_y_consultar(http, escenario)
     assert resp_get.status_code == 200, resp_get.text
     data_get = resp_get.json()
     assert data_get["preparacion_pago_id"] == prep_id
-    assert data_get["estado"] == "LISTO"
+    assert data_get["estado"] == "PENDIENTE"
+
+    # Confirmar método preparado
+    resp_conf = await http.cliente.post(f"/api/v1/pagos/stripe/metodos/{prep_id}/confirmar")
+    assert resp_conf.status_code == 200, resp_conf.text
+    assert resp_conf.json()["estado"] == "LISTO"
 
 
 @pytest.mark.asyncio
@@ -444,6 +449,7 @@ async def test_cu22_04_orden_pago_off_session_con_metodo_preparado(http, escenar
         json={},
     )
     prep_id = r_prep.json()["preparacion_pago_id"]
+    await http.cliente.post(f"/api/v1/pagos/stripe/metodos/{prep_id}/confirmar")
 
     # 2. Crear orden con consentimiento off-session
     r_ord = await http.cliente.post(
@@ -609,7 +615,18 @@ async def test_cu22_07_orden_pago_pedido_webhook_captura_y_stock_idempotente(
         "id": f"evt_test_{uuid.uuid4().hex[:6]}",
         "type": "payment_intent.succeeded",
         "livemode": False,
-        "data": {"object": {"id": pi_id, "amount": ord_data["centavos_usd"], "status": "succeeded"}},
+        "data": {
+            "object": {
+                "id": pi_id,
+                "amount": ord_data["centavos_usd"],
+                "currency": "usd",
+                "metadata": {
+                    "empresa_id": str(escenario.empresa_a_id),
+                    "pedido_id": str(p_id),
+                },
+                "status": "succeeded",
+            }
+        },
     }
     cuerpo = json.dumps(payload).encode("utf-8")
     secreto = settings.STRIPE_WEBHOOK_SECRET or "whsec_test"

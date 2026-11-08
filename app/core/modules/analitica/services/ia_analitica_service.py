@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any, Dict, List, Optional, Tuple
 
+import httpx
 from fastapi import HTTPException, status
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -68,6 +69,14 @@ class IAAnaliticaService:
         snapshot_hash: Optional[str] = None,
         proveedor_usado: Optional[str] = None,
     ) -> None:
+        prov_audit = (proveedor_usado or getattr(self.proveedor, "nombre", "DETERMINISTA"))
+        if "DETERMINISTA" in prov_audit:
+            prov_db = "DETERMINISTA"
+        elif "GEMINI" in prov_audit:
+            prov_db = "GEMINI"
+        else:
+            prov_db = prov_audit[:20]
+
         self.db.add(
             SolicitudIA(
                 id=consulta_id or uuid.uuid4(),
@@ -80,7 +89,7 @@ class IAAnaliticaService:
                 parametros=parametros or {},
                 respuesta=_sanitizar(respuesta, 2000),
                 datos=datos or {},
-                proveedor=(proveedor_usado or getattr(self.proveedor, "nombre", "DETERMINISTA"))[:20],
+                proveedor=prov_db,
                 latencia_ms=max(latencia_ms, 0),
                 snapshot_hash=snapshot_hash,
                 estado="COMPLETADA",
@@ -242,6 +251,13 @@ class IAAnaliticaService:
                 datos.desde = gemini_desde
             if datos.hasta is None and gemini_hasta is not None:
                 datos.hasta = gemini_hasta
+
+        from backend.app.core.reloj import entrada_local_a_utc
+        if datos.desde is not None:
+            datos.desde = entrada_local_a_utc(datos.desde)
+        if datos.hasta is not None:
+            datos.hasta = entrada_local_a_utc(datos.hasta)
+
         consulta_id = uuid.uuid4()
 
         columnas: List[str] = []
@@ -327,7 +343,7 @@ class IAAnaliticaService:
             columnas = ["periodo_semanal", "cantidad_ventas", "total_ingresos_bob"]
             q = (
                 select(
-                    func.to_char(Venta.creada_en, 'YYYY-WW').label("semana"),
+                    func.to_char(func.timezone('America/La_Paz', Venta.creada_en), 'YYYY-WW').label("semana"),
                     func.count(Venta.id).label("cnt"),
                     func.coalesce(func.sum(Venta.total), 0).label("tot"),
                 )

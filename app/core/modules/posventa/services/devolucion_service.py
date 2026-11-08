@@ -275,7 +275,12 @@ class DevolucionService:
 
         # Validar cantidades disponibles para devolución (excluyendo ya devueltas o cambiadas)
         for item in dto.lineas:
-            det = await self.db.get(DetalleVenta, item.detalle_venta_id)
+            stmt_det = (
+                select(DetalleVenta)
+                .where(DetalleVenta.id == item.detalle_venta_id)
+                .with_for_update()
+            )
+            det = (await self.db.execute(stmt_det)).scalars().first()
             if det is None or det.venta_id != venta.id:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
@@ -384,7 +389,8 @@ class DevolucionService:
     ) -> DevolucionDTO:
         digest = hash_payload(dto.model_dump(mode="json"))
 
-        dev = await self.db.get(Devolucion, devolucion_id)
+        stmt_dev = select(Devolucion).where(Devolucion.id == devolucion_id).with_for_update()
+        dev = (await self.db.execute(stmt_dev)).scalars().first()
         if dev is None or dev.empresa_id != usuario.empresa_id:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Devolución no encontrada")
 
