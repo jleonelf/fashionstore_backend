@@ -15,7 +15,7 @@ from sqlalchemy import select
 from backend.app.core.database import AsyncSessionLocal
 from backend.app.core.modules.catalogo.models import Categoria, Talla, Color, Producto, VarianteProducto
 from backend.app.core.modules.inventario.models import InventarioSucursal, MovimientoInventario
-from tests.helpers_ciclo2 import EMPRESA_TEST_ID
+from tests.helpers_ciclo2 import EMPRESA_TEST_ID, crear_ciudad_plataforma
 from backend.app.core.modules.inventario.services.inventario_service import InventarioService
 from backend.app.core.modules.inventario.repositories.movimiento_repository import MovimientoRepository
 from backend.app.core.modules.inventario.repositories.inventario_repository import InventarioRepository
@@ -27,8 +27,8 @@ async def _obtener_ciudad_sucursal(cliente_http: AsyncClient):
     if sucursales:
         return sucursales[0]["id"]
     uid = uuid.uuid4().hex[:6]
-    resp_ciudad = await cliente_http.post("/api/v1/ciudades", json={"nombre": f"Ciudad CU07 {uid}"})
-    ciudad_id = resp_ciudad.json()["id"]
+    ciudad = await crear_ciudad_plataforma(f"Ciudad CU07 {uid}")
+    ciudad_id = ciudad["id"]
     payload = {
         "ciudad_id": ciudad_id,
         "nombre": f"Sucursal CU07 {uid}",
@@ -44,9 +44,8 @@ async def _obtener_ciudad_sucursal(cliente_http: AsyncClient):
 
 async def _crear_sucursal_extra(cliente_http: AsyncClient):
     uid = uuid.uuid4().hex[:6]
-    resp_ciudad = await cliente_http.post("/api/v1/ciudades", json={"nombre": f"Ciudad Extra CU07 {uid}"})
-    assert resp_ciudad.status_code == 201
-    ciudad_id = resp_ciudad.json()["id"]
+    ciudad = await crear_ciudad_plataforma(f"Ciudad Extra CU07 {uid}")
+    ciudad_id = ciudad["id"]
     payload = {
         "ciudad_id": ciudad_id,
         "nombre": f"Sucursal Extra CU07 {uid}",

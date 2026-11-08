@@ -39,7 +39,7 @@ from backend.app.core.modules.organizacion.models import Sucursal
 from backend.app.core.modules.posventa.services.devolucion_service import Devolucion
 from backend.app.core.modules.ventas_pagos.models import DetalleVenta, RegistroIdempotencia, Venta
 from backend.app.core.modules.ventas_pagos.services.pedido_service import ObligacionReembolso
-from backend.app.core.permisos import es_admin, exigir_sucursal
+from backend.app.core.permisos import es_admin, exigir_sucursal, rol_de
 from backend.app.core.reloj import RelojSistema
 
 
@@ -181,6 +181,7 @@ class CambioDTO(BaseModel):
     vence_espera_en: Optional[datetime] = None
     modalidad_reemplazo: Optional[str] = None
     direccion: Optional[str] = None
+    creado_en: Optional[datetime] = None
     detalles: List[DetalleCambioItemDTO] = Field(default_factory=list)
 
 
@@ -192,6 +193,21 @@ class CambioService:
     def __init__(self, db: AsyncSession, reloj=None):
         self.db = db
         self.reloj = reloj or RelojSistema()
+
+    async def listar_mios(
+        self, usuario: Usuario, *, limite: int = 50, desplazamiento: int = 0
+    ) -> List[CambioDTO]:
+        if not usuario.empresa_id:
+            return []
+        stmt = (
+            select(Cambio)
+            .where(Cambio.empresa_id == usuario.empresa_id, Cambio.cliente_id == usuario.id)
+            .order_by(Cambio.creado_en.desc(), Cambio.id.desc())
+            .limit(limite)
+            .offset(desplazamiento)
+        )
+        filas = (await self.db.execute(stmt)).scalars().all()
+        return [await self.obtener_por_id(usuario, fila.id) for fila in filas]
 
     async def solicitar(
         self, usuario: Usuario, dto: CambioSolicitudDTO, clave: uuid.UUID
@@ -616,6 +632,8 @@ class CambioService:
         cambio = await self.db.get(Cambio, cambio_id)
         if cambio is None or cambio.empresa_id != usuario.empresa_id:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Cambio no encontrado")
+        if rol_de(usuario) == "CLIENTE" and cambio.cliente_id != usuario.id:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Cambio no encontrado")
 
         stmt_det = select(DetalleCambio).where(DetalleCambio.cambio_id == cambio.id)
         detalles = (await self.db.execute(stmt_det)).scalars().all()
@@ -634,6 +652,7 @@ class CambioService:
             vence_espera_en=cambio.vence_espera_en,
             modalidad_reemplazo=cambio.modalidad_reemplazo,
             direccion=cambio.direccion,
+            creado_en=cambio.creado_en,
             detalles=[
                 DetalleCambioItemDTO(
                     id=d.id,

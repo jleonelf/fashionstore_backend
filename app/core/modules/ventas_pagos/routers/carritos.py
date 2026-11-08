@@ -134,7 +134,7 @@ async def coberturaCarrito(
 
 
 @router.post(
-    "/mio/checkout", response_model=CheckoutRespuestaDTO, status_code=status.HTTP_201_CREATED,
+    "/mio/checkout-legado", response_model=CheckoutRespuestaDTO, status_code=status.HTTP_201_CREATED,
     summary="Confirmar compra digital (CU14)",
     description="Canal WEB o MOVIL, modalidad RECOJO o DELIVERY, una sola sucursal. Crea venta "
     "PENDIENTE_PAGO, compromete stock 60 min (SELECT FOR UPDATE ordenado + Kardex), congela "

@@ -55,10 +55,11 @@ El script (con protección `_test`) hace, en orden:
 6. Verificación del índice `uq_movimientos_efecto_logico` con el DDL exacto
    de la migración (repara re-ejecuciones donde alembic ya está en head).
 7. Resto del esquema desde los modelos (`checkfirst`).
-8. Semilla mínima del tenant heredado `fashionstore`: roles empresariales y
-   `SUPERADMIN`, ciudad, sucursal, admin de pruebas y maestros de catálogo
-   (talla, color, categoría, proveedor). Si no hay tasa vigente, añade una
-   tasa BOB/USD de prueba. La suite crea y limpia el resto de sus datos.
+8. Semilla del tenant heredado `fashionstore`: roles empresariales,
+   `SUPERADMIN` de plataforma, ciudad, sucursal, admin de pruebas, maestros de
+   catalogo (talla, color, categoria, proveedor), plan `TEST` y suscripcion
+   vigente creada por el superadmin. Si no hay tasa vigente, anade una tasa
+   BOB/USD de prueba. La suite crea y limpia el resto de sus datos.
 
 El script es idempotente: puede repetirse sin duplicar la semilla.
 
@@ -91,6 +92,10 @@ venv\Scripts\python.exe -c "import sys; sys.path.insert(0, '.'); sys.path.insert
 - Auto-login del fixture `cliente_http`: `TEST_ADMIN_EMAIL` (por defecto
   `admin@fashionstore.com`) y `TEST_ADMIN_PASSWORD` (por defecto
   `Fashion123!`). No se usa `admin123456` en ningún test.
+- La semilla de suscripcion usa `TEST_SUPERADMIN_EMAIL` y
+  `TEST_SUPERADMIN_PASSWORD` (por defecto `superadmin@fashionstore.com` /
+  `Fashion123!`). El usuario se crea solo en la base aislada `*_test`; lo
+  requiere el trigger de plataforma que valida `creada_por` al asignar planes.
 - La prueba de rollback de adelanto (`test_sucursal_adelanto_coherente`)
   compara contra el estado original de la sucursal, sin asumir
   `adelanto_activo=false`.

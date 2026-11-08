@@ -164,11 +164,16 @@ class InventarioRepository:
     async def disponibilidadPorSucursal(self, variante_id: uuid.UUID) -> List[Dict[str, Any]]:
         return await self.porVarianteEnriquecido(variante_id)
 
-    async def existencias(self, sucursal_id: Optional[uuid.UUID] = None) -> List[InventarioSucursal]:
+    async def existencias(
+        self,
+        sucursal_id: Optional[uuid.UUID] = None,
+        empresa_id: Optional[uuid.UUID] = None,
+    ) -> List[InventarioSucursal]:
         query = select(InventarioSucursal)
         if sucursal_id:
             query = query.where(InventarioSucursal.sucursal_id == sucursal_id)
         if empresa_id:
+            query = query.join(Sucursal, Sucursal.id == InventarioSucursal.sucursal_id)
             query = query.where(Sucursal.empresa_id == empresa_id)
         result = await self.db.execute(query)
         return list(result.scalars().all())
@@ -188,8 +193,6 @@ class InventarioRepository:
         )
         if sucursal_id:
             query = query.where(InventarioSucursal.sucursal_id == sucursal_id)
-        if empresa_id:
-            query = query.where(Sucursal.empresa_id == empresa_id)
         if empresa_id:
             query = query.where(Sucursal.empresa_id == empresa_id)
         query = query.order_by(Sucursal.nombre, Producto.nombre)

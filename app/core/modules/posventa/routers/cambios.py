@@ -6,9 +6,9 @@ Rutas:
 - GET /cambios/{cambio_id}
 """
 import uuid
-from typing import Optional
+from typing import List, Optional
 
-from fastapi import APIRouter, Depends, Header, status
+from fastapi import APIRouter, Depends, Header, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.core.database import get_db
@@ -23,6 +23,23 @@ from backend.app.core.modules.posventa.services.cambio_service import (
 )
 
 router = APIRouter()
+
+
+@router.get(
+    "/mios",
+    response_model=List[CambioDTO],
+    status_code=status.HTTP_200_OK,
+    summary="Listar cambios propios (CU08)",
+)
+async def listar_mis_cambios(
+    limite: int = Query(50, ge=1, le=100),
+    desplazamiento: int = Query(0, ge=0),
+    db: AsyncSession = Depends(get_db),
+    usuario: Usuario = Depends(get_usuario_actual),
+) -> List[CambioDTO]:
+    return await CambioService(db).listar_mios(
+        usuario, limite=limite, desplazamiento=desplazamiento
+    )
 
 
 @router.post(

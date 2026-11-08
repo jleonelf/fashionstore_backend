@@ -319,10 +319,22 @@ async def semilla_minima() -> None:
         Talla,
     )
     from backend.app.core.modules.organizacion.models import Ciudad, Sucursal, TasaCambio
-    from backend.app.core.modules.identidad_empresas.models import Empresa, Rol, Usuario
+    from backend.app.core.modules.identidad_empresas.models import (
+        Empresa,
+        Plan,
+        Rol,
+        Suscripcion,
+        Usuario,
+    )
 
     email_admin = os.getenv("TEST_ADMIN_EMAIL", "admin@fashionstore.com")
     clave_admin = os.getenv("TEST_ADMIN_PASSWORD", "Fashion123!")
+    email_superadmin = os.getenv(
+        "TEST_SUPERADMIN_EMAIL", "superadmin@fashionstore.com"
+    )
+    clave_superadmin = os.getenv(
+        "TEST_SUPERADMIN_PASSWORD", "Fashion123!"
+    )
 
     async with AsyncSessionLocal() as db:
         async with db.begin():
@@ -415,22 +427,107 @@ async def semilla_minima() -> None:
                 )
             ).scalars().first()
             if admin is None:
-                db.add(
-                    Usuario(
-                        id=uuid.uuid4(),
-                        empresa_id=empresa.id,
-                        rol_id=roles["ADMINISTRADOR"].id,
-                        nombres="Administrador",
-                        apellidos="Pruebas",
-                        correo_electronico=email_admin,
-                        contrasenia_hash=generar_contrasenia_hash(clave_admin),
-                        telefono="+591 70000000",
-                        estado="ACTIVO",
-                    )
+                admin = Usuario(
+                    id=uuid.uuid4(),
+                    empresa_id=empresa.id,
+                    rol_id=roles["ADMINISTRADOR"].id,
+                    nombres="Administrador",
+                    apellidos="Pruebas",
+                    correo_electronico=email_admin,
+                    contrasenia_hash=generar_contrasenia_hash(clave_admin),
+                    telefono="+591 70000000",
+                    estado="ACTIVO",
                 )
+                db.add(admin)
                 print(f"  + Admin {email_admin}")
             else:
                 print(f"[=] Admin {email_admin} ya existe.")
+
+            # El trigger de suscripciones exige que creada_por sea un
+            # SUPERADMIN de plataforma (empresa_id NULL). No sirve el admin
+            # de tienda, aunque tenga el rol ADMINISTRADOR.
+            superadmin = (
+                await db.execute(
+                    select(Usuario).where(
+                        Usuario.correo_electronico == email_superadmin
+                    )
+                )
+            ).scalars().first()
+            if superadmin is None:
+                superadmin = Usuario(
+                    id=uuid.uuid4(),
+                    empresa_id=None,
+                    rol_id=roles["SUPERADMIN"].id,
+                    nombres="Superadministrador",
+                    apellidos="Pruebas",
+                    correo_electronico=email_superadmin,
+                    contrasenia_hash=generar_contrasenia_hash(clave_superadmin),
+                    telefono="+591 70000001",
+                    estado="ACTIVO",
+                )
+                db.add(superadmin)
+                print(f"  + Superadmin de plataforma {email_superadmin}")
+            elif (
+                superadmin.empresa_id is not None
+                or superadmin.rol_id != roles["SUPERADMIN"].id
+            ):
+                raise RuntimeError(
+                    "TEST_SUPERADMIN_EMAIL debe pertenecer a un usuario "
+                    "SUPERADMIN sin empresa en la base aislada de pruebas."
+                )
+
+            # Las reservas y ventas requieren que la empresa de pruebas tenga
+            # un plan habilitado. La limpieza de la suite trunca organizacion
+            # (incluyendo suscripciones), así que esta asignación idempotente
+            # vuelve a crear una suscripción vigente antes de cada ejecución.
+            plan = (
+                await db.execute(select(Plan).where(Plan.codigo == "TEST"))
+            ).scalars().first()
+            if plan is None:
+                plan = Plan(
+                    id=uuid.uuid4(),
+                    codigo="TEST",
+                    nombre="Plan de pruebas",
+                    max_sucursales_activas=100,
+                    reportes_generativos=True,
+                    modelos_ml=True,
+                    permite_operacion_offline=True,
+                    activo=True,
+                )
+                db.add(plan)
+                print("  + Plan TEST")
+            elif not plan.activo or not plan.permite_operacion_offline:
+                plan.activo = True
+                plan.permite_operacion_offline = True
+
+            await db.flush()
+            suscripcion = (
+                await db.execute(
+                    select(Suscripcion)
+                    .where(Suscripcion.empresa_id == empresa.id)
+                    .order_by(Suscripcion.version.desc())
+                    .limit(1)
+                )
+            ).scalars().first()
+            ahora = datetime.now(timezone.utc)
+            if suscripcion is None or suscripcion.vence_en <= ahora:
+                version = (suscripcion.version + 1) if suscripcion else 1
+                db.add(
+                    Suscripcion(
+                        id=uuid.uuid4(),
+                        empresa_id=empresa.id,
+                        plan_id=plan.id,
+                        version=version,
+                        inicia_en=ahora - timedelta(days=1),
+                        vence_en=ahora + timedelta(days=3650),
+                        creada_por=superadmin.id,
+                        motivo="Suscripción habilitada por la semilla de pruebas",
+                    )
+                )
+                print("  + Suscripción TEST vigente para FashionStore")
+            elif suscripcion.plan_id != plan.id:
+                suscripcion.plan_id = plan.id
+                suscripcion.vence_en = ahora + timedelta(days=3650)
 
             # Maestros mínimos de catálogo (algunas pruebas CU04 los asumen
             # existentes y crean el resto de sus datos por sí mismas).

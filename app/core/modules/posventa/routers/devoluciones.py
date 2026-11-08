@@ -8,9 +8,9 @@ Rutas:
 - POST /mermas (CU20 / CU12)
 """
 import uuid
-from typing import Optional
+from typing import List, Optional
 
-from fastapi import APIRouter, Depends, Header, status
+from fastapi import APIRouter, Depends, Header, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.core.database import get_db
@@ -30,6 +30,23 @@ from backend.app.core.modules.posventa.services.devolucion_service import (
 
 router_devoluciones = APIRouter()
 router_mermas = APIRouter()
+
+
+@router_devoluciones.get(
+    "/mias",
+    response_model=List[DevolucionDTO],
+    status_code=status.HTTP_200_OK,
+    summary="Listar solicitudes de devolución propias (CU20)",
+)
+async def listar_mis_devoluciones(
+    limite: int = Query(50, ge=1, le=100),
+    desplazamiento: int = Query(0, ge=0),
+    db: AsyncSession = Depends(get_db),
+    usuario: Usuario = Depends(get_usuario_actual),
+) -> List[DevolucionDTO]:
+    return await DevolucionService(db).listar_mias(
+        usuario, limite=limite, desplazamiento=desplazamiento
+    )
 
 
 @router_devoluciones.post(

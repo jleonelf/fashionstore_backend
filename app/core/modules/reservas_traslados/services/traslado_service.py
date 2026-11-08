@@ -205,6 +205,7 @@ class TrasladoService:
         if fila is None or fila.disponible < detalle.cantidad_solicitada:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Sin stock suficiente en el origen indicado")
         traslado = Traslado(
+            empresa_id=reserva.empresa_id,
             reserva_id=reserva.id,
             sucursal_origen_id=dto.sucursal_origen_id,
             sucursal_destino_id=reserva.sucursal_destino_id,

@@ -6,7 +6,7 @@ from sqlalchemy import select
 from backend.app.core.database import AsyncSessionLocal
 from backend.app.core.modules.catalogo.models import Categoria, Talla, Color, Producto, VarianteProducto
 from backend.app.core.modules.inventario.models import InventarioSucursal, MovimientoInventario
-from tests.helpers_ciclo2 import EMPRESA_TEST_ID
+from tests.helpers_ciclo2 import EMPRESA_TEST_ID, crear_ciudad_plataforma
 
 async def _obtener_ciudad_sucursal(cliente_http):
     # Intentar usar sucursal existente, si no crear nueva
@@ -16,8 +16,8 @@ async def _obtener_ciudad_sucursal(cliente_http):
         return sucursales[0]["id"]
     # crear ciudad + sucursal
     uid = uuid.uuid4().hex[:6]
-    resp_ciudad = await cliente_http.post("/api/v1/ciudades", json={"nombre": f"Ciudad CU04 {uid}"})
-    ciudad_id = resp_ciudad.json()["id"]
+    ciudad = await crear_ciudad_plataforma(f"Ciudad CU04 {uid}")
+    ciudad_id = ciudad["id"]
     payload = {
         "ciudad_id": ciudad_id,
         "nombre": f"Sucursal CU04 {uid}",

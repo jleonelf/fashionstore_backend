@@ -31,8 +31,8 @@ class SucursalService:
         self.plan_service = PlanService(db)
 
     async def _construir_dto(self, s: Sucursal) -> SucursalDTO:
-        ciudad_nombre = s.ciudad.nombre if s.ciudad else None
-        if not ciudad_nombre and s.ciudad_id:
+        ciudad_nombre = None
+        if s.ciudad_id:
             c = await self.ciudad_repo.buscarPorId(s.ciudad_id)
             if c:
                 ciudad_nombre = c.nombre
