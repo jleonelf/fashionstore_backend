@@ -74,6 +74,25 @@ class ReembolsoService:
             componentes=comps_dto,
         )
 
+    async def listar_mios(
+        self, usuario: Usuario, *, limite: int = 50, desplazamiento: int = 0
+    ) -> List[ReembolsoDetalleDTO]:
+        if not usuario.empresa_id:
+            return []
+        stmt = (
+            select(ObligacionReembolso)
+            .where(
+                ObligacionReembolso.empresa_id == usuario.empresa_id,
+                ObligacionReembolso.cliente_id == usuario.id,
+            )
+            .options(selectinload(ObligacionReembolso.componentes))
+            .order_by(ObligacionReembolso.creada_en.desc(), ObligacionReembolso.id.desc())
+            .limit(limite)
+            .offset(desplazamiento)
+        )
+        filas = (await self.db.execute(stmt)).scalars().all()
+        return [self._a_detalle_dto(fila) for fila in filas]
+
     async def solicitar_reembolso(
         self, usuario: Usuario, datos: ReembolsoSolicitudDTO, clave_idempotencia: uuid.UUID,
     ) -> ReembolsoDetalleDTO:

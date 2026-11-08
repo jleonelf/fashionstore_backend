@@ -7,6 +7,7 @@ from backend.app.core.database import AsyncSessionLocal
 from backend.app.core.modules.catalogo.models import Producto, VarianteProducto, Categoria, Talla, Color
 from backend.app.core.modules.inventario.models import InventarioSucursal
 from backend.app.core.modules.organizacion.models import Sucursal
+from tests.helpers_ciclo2 import crear_ciudad_plataforma
 
 async def _get_or_create_ciudad_sucursal(cliente_http, suffix="CU06"):
     # Intentar reusar sucursales existentes o crear 2
@@ -17,8 +18,8 @@ async def _get_or_create_ciudad_sucursal(cliente_http, suffix="CU06"):
     # crear ciudad/sucursal si falta
     uid = uuid.uuid4().hex[:6]
     # ciudad 1
-    r_ciudad = await cliente_http.post("/api/v1/ciudades", json={"nombre": f"Ciudad CU06-A {uid}"})
-    ciudad_id = r_ciudad.json()["id"]
+    ciudad = await crear_ciudad_plataforma(f"Ciudad CU06-A {uid}")
+    ciudad_id = ciudad["id"]
     r_suc1 = await cliente_http.post("/api/v1/sucursales", json={
         "ciudad_id": ciudad_id,
         "nombre": f"Sucursal CU06-A {uid}",
@@ -28,8 +29,8 @@ async def _get_or_create_ciudad_sucursal(cliente_http, suffix="CU06"):
     assert r_suc1.status_code == 201, r_suc1.text
     suc1 = r_suc1.json()["id"]
     # ciudad 2 / sucursal 2
-    r_ciudad2 = await cliente_http.post("/api/v1/ciudades", json={"nombre": f"Ciudad CU06-B {uid}"})
-    ciudad2_id = r_ciudad2.json()["id"]
+    ciudad2 = await crear_ciudad_plataforma(f"Ciudad CU06-B {uid}")
+    ciudad2_id = ciudad2["id"]
     r_suc2 = await cliente_http.post("/api/v1/sucursales", json={
         "ciudad_id": ciudad2_id,
         "nombre": f"Sucursal CU06-B {uid}",
@@ -291,7 +292,10 @@ async def test_cu06_catalogo_filtros_y_busqueda(cliente_http: AsyncClient):
     assert "colecciones" in data_opc
 
     # Catalogo alias endpoint
-    r_alias = await cliente_http.get("/api/v1/catalogo/productos", params={"texto": "Camisa"})
+    r_alias = await cliente_http.get(
+        "/api/v1/catalogo/productos",
+        params={"texto": "Camisa", "empresa_codigo": "fashionstore"},
+    )
     assert r_alias.status_code == 200
     assert prod1_id in [p["id"] for p in r_alias.json()]
 

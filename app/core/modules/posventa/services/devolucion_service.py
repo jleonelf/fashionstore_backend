@@ -27,6 +27,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     select,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.exc import IntegrityError
@@ -43,7 +44,7 @@ from backend.app.core.modules.inventario.repositories.inventario_repository impo
 from backend.app.core.modules.inventario.repositories.movimiento_repository import MovimientoRepository
 from backend.app.core.modules.ventas_pagos.models import DetalleVenta, RegistroIdempotencia, Venta
 from backend.app.core.modules.ventas_pagos.repositories.venta_repository import DetalleVentaRepository, VentaRepository
-from backend.app.core.permisos import es_admin, exigir_sucursal
+from backend.app.core.permisos import es_admin, exigir_sucursal, rol_de
 from backend.app.core.reloj import RelojSistema
 
 
@@ -202,6 +203,24 @@ class DevolucionService:
         self.inventario_repo = InventarioRepository(db)
         self.movimiento_repo = MovimientoRepository(db)
 
+    async def listar_mias(
+        self, usuario: Usuario, *, limite: int = 50, desplazamiento: int = 0
+    ) -> List[DevolucionDTO]:
+        if not usuario.empresa_id:
+            return []
+        stmt = (
+            select(Devolucion)
+            .where(
+                Devolucion.empresa_id == usuario.empresa_id,
+                Devolucion.cliente_id == usuario.id,
+            )
+            .order_by(Devolucion.solicitada_en.desc(), Devolucion.id.desc())
+            .limit(limite)
+            .offset(desplazamiento)
+        )
+        filas = (await self.db.execute(stmt)).scalars().all()
+        return [await self.obtener_por_id(usuario, fila.id) for fila in filas]
+
     def _autorizar_personal(self, usuario: Usuario, sucursal_id: uuid.UUID) -> None:
         rol = (usuario.rol.nombre if usuario.rol else "").upper()
         if rol == "ENCARGADO":
@@ -218,6 +237,10 @@ class DevolucionService:
 
         # Idempotencia previa con comercial.registros_idempotencia
         if clave:
+            await self.db.execute(
+                text("SELECT pg_advisory_xact_lock(hashtextextended(:clave, 0))"),
+                {"clave": str(clave)},
+            )
             stmt_idm = select(RegistroIdempotencia).where(
                 RegistroIdempotencia.clave == clave,
                 RegistroIdempotencia.recurso_tipo == "DEVOLUCION",
@@ -387,9 +410,35 @@ class DevolucionService:
     async def inspeccionar(
         self, usuario: Usuario, devolucion_id: uuid.UUID, dto: InspeccionDTO, clave: uuid.UUID
     ) -> DevolucionDTO:
-        digest = hash_payload(dto.model_dump(mode="json"))
+        digest = hash_payload(
+            {"devolucion_id": str(devolucion_id), **dto.model_dump(mode="json")}
+        )
 
-        stmt_dev = select(Devolucion).where(Devolucion.id == devolucion_id).with_for_update()
+        await self.db.execute(
+            text("SELECT pg_advisory_xact_lock(hashtextextended(:clave, 0))"),
+            {"clave": str(clave)},
+        )
+
+        stmt_idem = select(RegistroIdempotencia).where(
+            RegistroIdempotencia.clave == clave,
+            RegistroIdempotencia.usuario_id == usuario.id,
+            RegistroIdempotencia.recurso_tipo == "DEVOLUCION",
+            RegistroIdempotencia.operacion == "INSPECCIONAR_DEVOLUCION",
+        )
+        previo = (await self.db.execute(stmt_idem)).scalars().first()
+        if previo is not None:
+            if previo.hash_solicitud != digest:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="Idempotency-Key ya usada con otra solicitud",
+                )
+            return await self.obtener_por_id(usuario, previo.recurso_id)
+
+        stmt_dev = (
+            select(Devolucion)
+            .where(Devolucion.id == devolucion_id)
+            .with_for_update()
+        )
         dev = (await self.db.execute(stmt_dev)).scalars().first()
         if dev is None or dev.empresa_id != usuario.empresa_id:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Devolución no encontrada")
@@ -457,12 +506,27 @@ class DevolucionService:
                 det.cantidad_rechazada = det.cantidad_recibida
 
         dev.estado = dto.dictamen
+        salida = await self.obtener_por_id(usuario, dev.id)
+        self.db.add(
+            RegistroIdempotencia(
+                clave=clave,
+                usuario_id=usuario.id,
+                recurso_tipo="DEVOLUCION",
+                operacion="INSPECCIONAR_DEVOLUCION",
+                hash_solicitud=digest,
+                recurso_id=dev.id,
+                respuesta=salida.model_dump(mode="json"),
+                creada_en=ahora,
+            )
+        )
         await self.db.commit()
-        return await self.obtener_por_id(usuario, dev.id)
+        return salida
 
     async def obtener_por_id(self, usuario: Usuario, devolucion_id: uuid.UUID) -> DevolucionDTO:
         dev = await self.db.get(Devolucion, devolucion_id)
         if dev is None or dev.empresa_id != usuario.empresa_id:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Devolución no encontrada")
+        if rol_de(usuario) == "CLIENTE" and dev.cliente_id != usuario.id:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Devolución no encontrada")
 
         stmt_det = select(DetalleDevolucion).where(DetalleDevolucion.devolucion_id == dev.id)
@@ -501,14 +565,58 @@ class DevolucionService:
         self, usuario: Usuario, dto: DevolucionCrearDTO, clave: uuid.UUID
     ) -> Tuple[Any, bool]:
         """Adaptador heredado para CU12."""
-        detalle = await self.db.get(DetalleVenta, dto.detalle_venta_id)
+        if not usuario.empresa_id:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Usuario sin empresa asignada")
+
+        # Serializa reintentos con la misma clave, incluso si llegan en
+        # paralelo o apuntan a líneas distintas de venta.
+        await self.db.execute(
+            text("SELECT pg_advisory_xact_lock(hashtextextended(:clave, 0))"),
+            {"clave": str(clave)},
+        )
+        stmt_detalle = (
+            select(DetalleVenta)
+            .where(DetalleVenta.id == dto.detalle_venta_id)
+            .with_for_update()
+        )
+        detalle = (await self.db.execute(stmt_detalle)).scalars().first()
         if detalle is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Detalle de venta no encontrado")
         venta = await self.db.get(Venta, detalle.venta_id)
-        if venta is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Venta no encontrada")
+        if venta is None or venta.empresa_id != usuario.empresa_id:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Venta no encontrada en la empresa")
 
         self._autorizar_personal(usuario, venta.sucursal_id)
+
+        movimiento_previo = await self.movimiento_repo.buscarPorClaveIdempotencia(clave)
+        if movimiento_previo is not None:
+            mismo_payload = (
+                movimiento_previo.tipo == "DEVOLUCION"
+                and movimiento_previo.referencia_tipo == "DETALLE_VENTA"
+                and movimiento_previo.referencia_id == detalle.id
+                and movimiento_previo.variante_id == detalle.variante_id
+                and movimiento_previo.sucursal_destino_id == venta.sucursal_id
+                and movimiento_previo.cantidad == dto.cantidad
+                and movimiento_previo.observacion == dto.motivo
+                and movimiento_previo.responsable_id == usuario.id
+            )
+            if not mismo_payload:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="Idempotency-Key ya usada con otra solicitud",
+                )
+            await self.db.commit()
+            return movimiento_previo, False
+
+        devuelta = await self.detalle_repo.cantidadDevueltaAcumulada(detalle.id)
+        if devuelta + dto.cantidad > detalle.cantidad:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    f"La devolución acumulada excede lo vendido "
+                    f"(vendido: {detalle.cantidad}, devuelto: {devuelta})"
+                ),
+            )
 
         filas = await self.inventario_repo.bloquearFilas([(venta.sucursal_id, detalle.variante_id)])
         fila = filas.get((venta.sucursal_id, detalle.variante_id))
@@ -529,9 +637,24 @@ class DevolucionService:
             clave_idempotencia=clave,
             observacion=dto.motivo,
         )
-        creado, reintento = await self.movimiento_repo.registrarUnico(mov)
+        creado = await self.movimiento_repo.registrar(mov)
+        lineas_venta = (
+            await self.db.execute(
+                select(DetalleVenta).where(DetalleVenta.venta_id == venta.id)
+            )
+        ).scalars().all()
+        cantidades_devuelta = {
+            linea.id: await self.detalle_repo.cantidadDevueltaAcumulada(linea.id)
+            for linea in lineas_venta
+        }
+        total_vendido = sum(linea.cantidad for linea in lineas_venta)
+        total_devuelto = sum(cantidades_devuelta.values())
+        if total_devuelto >= total_vendido:
+            venta.estado = "DEVUELTA"
+        elif total_devuelto > 0:
+            venta.estado = "PARCIALMENTE_DEVUELTA"
         await self.db.commit()
-        return creado, not reintento
+        return creado, True
 
 
 class MermaService:
@@ -559,6 +682,50 @@ class MermaService:
         causa = dto.causa or dto.motivo_codigo or dto.descripcion
         if not causa or not causa.strip():
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="La causa de la merma es obligatoria")
+
+        if not usuario.empresa_id:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Usuario sin empresa asignada")
+
+        # La clave se bloquea antes de tocar stock para que los reintentos
+        # concurrentes no apliquen dos veces la misma merma.
+        await self.db.execute(
+            text("SELECT pg_advisory_xact_lock(hashtextextended(:clave, 0))"),
+            {"clave": str(clave)},
+        )
+        movimiento_previo = await self.movimiento_repo.buscarPorClaveIdempotencia(clave)
+        if movimiento_previo is not None:
+            mismo_payload = (
+                movimiento_previo.tipo == "MERMA"
+                and movimiento_previo.variante_id == dto.variante_id
+                and movimiento_previo.sucursal_origen_id == dto.sucursal_id
+                and movimiento_previo.sucursal_destino_id == dto.sucursal_id
+                and movimiento_previo.cantidad == dto.cantidad
+                and movimiento_previo.observacion == causa
+                and movimiento_previo.responsable_id == usuario.id
+            )
+            if not mismo_payload:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="Idempotency-Key ya usada con otra solicitud",
+                )
+            await self.db.commit()
+            return MermaDTO(
+                id=movimiento_previo.id,
+                variante_id=movimiento_previo.variante_id,
+                sucursal_id=dto.sucursal_id,
+                cantidad=movimiento_previo.cantidad,
+                costo_unitario=movimiento_previo.costo_unitario,
+                motivo_codigo=dto.motivo_codigo or causa,
+                causa=causa,
+                responsable_id=movimiento_previo.responsable_id,
+                fecha_hora=movimiento_previo.fecha_hora,
+            )
+
+        from backend.app.core.modules.organizacion.models import Sucursal
+
+        sucursal = await self.db.get(Sucursal, dto.sucursal_id)
+        if sucursal is None or sucursal.empresa_id != usuario.empresa_id:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Sucursal no encontrada en la empresa")
 
         var = await self.db.get(VarianteProducto, dto.variante_id)
         if var is None or var.empresa_id != usuario.empresa_id:
@@ -591,6 +758,7 @@ class MermaService:
             fecha_hora=ahora,
         )
         self.db.add(mov)
+        await self.db.flush()
         await self.db.commit()
 
         return MermaDTO(

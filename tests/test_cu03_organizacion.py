@@ -1,36 +1,40 @@
 import uuid
 import pytest
 from httpx import AsyncClient
+from tests.helpers_ciclo2 import crear_ciudad_plataforma, crear_superadmin
 
 @pytest.mark.asyncio
 async def test_crear_y_listar_ciudades(cliente_http: AsyncClient):
     uid = uuid.uuid4().hex[:6]
     nombre_ciudad = f"Cochabamba {uid}"
 
-    # 1. Crear ciudad
-    resp_crear = await cliente_http.post("/api/v1/ciudades", json={"nombre": nombre_ciudad})
-    assert resp_crear.status_code == 201
-    datos = resp_crear.json()
+    # El catÃ¡logo global de ciudades solo lo gestiona el superadmin.
+    async with await crear_superadmin() as plataforma:
+        resp_crear = await plataforma.client.post(
+            "/api/v1/ciudades", json={"nombre": nombre_ciudad}
+        )
+        assert resp_crear.status_code == 201, resp_crear.text
+        datos = resp_crear.json()
+        resp_dup = await plataforma.client.post(
+            "/api/v1/ciudades", json={"nombre": nombre_ciudad}
+        )
+        assert resp_dup.status_code == 409
+        resp_listar = await plataforma.client.get("/api/v1/ciudades")
+        assert resp_listar.status_code == 200
+        ciudades = resp_listar.json()
     assert datos["nombre"] == nombre_ciudad
     assert datos["activo"] == True
     ciudad_id = datos["id"]
 
-    # 2. Intentar duplicar nombre -> 409
-    resp_dup = await cliente_http.post("/api/v1/ciudades", json={"nombre": nombre_ciudad})
-    assert resp_dup.status_code == 409
-
-    # 3. Listar ciudades
-    resp_listar = await cliente_http.get("/api/v1/ciudades")
-    assert resp_listar.status_code == 200
-    ciudades = resp_listar.json()
+    # 2-3. Duplicado y listado se comprobaron con el actor global autorizado.
     assert any(c["id"] == ciudad_id for c in ciudades)
 
 @pytest.mark.asyncio
 async def test_crear_sucursal_con_parametros_delivery(cliente_http: AsyncClient):
     # Crear o usar una ciudad
     uid = uuid.uuid4().hex[:6]
-    resp_ciudad = await cliente_http.post("/api/v1/ciudades", json={"nombre": f"La Paz {uid}"})
-    ciudad_id = resp_ciudad.json()["id"]
+    ciudad = await crear_ciudad_plataforma(f"La Paz {uid}")
+    ciudad_id = ciudad["id"]
 
     payload_sucursal = {
         "ciudad_id": ciudad_id,

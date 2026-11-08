@@ -69,7 +69,7 @@ async def _carrera_webhook_vs_expirador(cliente_http: AsyncClient, tag: str, exp
         if expirada:
             await forzar_vencimiento_venta(venta_id)
         cuerpo = json.dumps(
-            {"id": "e1", "type": "payment_intent.succeeded",
+            {"id": f"e-{pi}", "type": "payment_intent.succeeded",
              "data": {"object": {"id": pi}}}).encode()
         firma = gw.firmar_prueba(cuerpo, "whsec_prueba")
         barrera = asyncio.Event()

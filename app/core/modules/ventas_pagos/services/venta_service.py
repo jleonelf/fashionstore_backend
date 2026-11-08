@@ -216,6 +216,11 @@ class VentaService:
         self, usuario: Usuario, dto: VentaPresencialCrearDTO, clave: uuid.UUID, digest: str
     ) -> Venta:
         self._autorizar_caja(usuario, dto.sucursal_id)
+        if not usuario.empresa_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Usuario sin empresa asignada",
+            )
         if not dto.items:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="La venta requiere al menos un item")
         vistos_variante, vistos_linea = set(), set()
@@ -230,8 +235,8 @@ class VentaService:
                     raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Linea de reserva duplicada en la venta")
                 vistos_linea.add(item.detalle_reserva_id)
         sucursal = await self.sucursal_repo.buscarPorId(dto.sucursal_id)
-        if sucursal is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Sucursal no encontrada")
+        if sucursal is None or sucursal.empresa_id != usuario.empresa_id:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Sucursal no encontrada en la empresa")
         if not sucursal.activa:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Sucursal inactiva")
 
@@ -316,6 +321,7 @@ class VentaService:
         total = subtotal - adelanto_desc
 
         venta = Venta(
+            empresa_id=usuario.empresa_id,
             numero=await self._numero_unico(),
             cliente_id=dto.cliente_id or (reserva.cliente_id if reserva else None),
             reserva_id=reserva.id if reserva else None,
@@ -330,6 +336,7 @@ class VentaService:
             total=total,
             creada_en=ahora,
             confirmada_en=ahora,
+            entregada_en=ahora,
             clave_idempotencia=clave,
             hash_solicitud=digest,
         )

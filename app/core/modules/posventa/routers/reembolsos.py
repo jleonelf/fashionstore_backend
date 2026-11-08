@@ -8,8 +8,8 @@ Endpoints:
 - POST /reembolsos/{reembolso_id}/conciliar
 """
 import uuid
-from typing import Optional
-from fastapi import APIRouter, Depends, Header, status
+from typing import List, Optional
+from fastapi import APIRouter, Depends, Header, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.core.database import get_db
@@ -28,6 +28,23 @@ from backend.app.core.errores import (
 )
 
 router = APIRouter()
+
+
+@router.get(
+    "/mios",
+    response_model=List[ReembolsoDetalleDTO],
+    status_code=status.HTTP_200_OK,
+    summary="Listar reembolsos propios (CU27)",
+)
+async def listar_mis_reembolsos(
+    limite: int = Query(50, ge=1, le=100),
+    desplazamiento: int = Query(0, ge=0),
+    db: AsyncSession = Depends(get_db),
+    usuario: Usuario = Depends(get_usuario_actual),
+) -> List[ReembolsoDetalleDTO]:
+    return await ReembolsoService(db).listar_mios(
+        usuario, limite=limite, desplazamiento=desplazamiento
+    )
 
 
 @router.post(

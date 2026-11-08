@@ -342,8 +342,8 @@ class CarritoService:
         if not lineas:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Carrito vacío: nada que confirmar")
         sucursal = await self.sucursal_repo.buscarPorId(dto.sucursal_id)
-        if sucursal is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Sucursal no encontrada")
+        if sucursal is None or sucursal.empresa_id != usuario.empresa_id:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Sucursal no encontrada en la empresa")
         if not sucursal.activa:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Sucursal inactiva")
 
@@ -415,6 +415,7 @@ class CarritoService:
         )
 
         venta = Venta(
+            empresa_id=usuario.empresa_id,
             numero=await self._numero_venta(),
             cliente_id=cliente_id,
             reserva_id=None,
@@ -469,6 +470,7 @@ class CarritoService:
         else:
             codigo = None
         pedido = PedidoEntrega(
+            empresa_id=usuario.empresa_id,
             venta_id=venta.id,
             sucursal_id=dto.sucursal_id,
             cliente_id=cliente_id,
@@ -493,6 +495,7 @@ class CarritoService:
             async with self.db.begin_nested():
                 self.db.add(
                     HistorialNavegacion(
+                        empresa_id=usuario.empresa_id,
                         cliente_id=cliente_id, usuario_id=usuario.id, evento="COMPRA",
                         metadatos={"venta_id": str(venta.id), "canal": dto.canal},
                     )

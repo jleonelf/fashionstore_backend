@@ -3,6 +3,7 @@
 Crea usuarios, sucursales, variantes con stock y reservas con nombres unicos
 por corrida. No reutiliza datos entre pruebas salvo la sucursal semilla.
 """
+import os
 import uuid
 from decimal import Decimal
 
@@ -85,6 +86,26 @@ async def crear_cliente(tag: str = "c2") -> UsuarioPrueba:
     return UsuarioPrueba(await _nuevo_client(token), token, usuario_id, email, "CLIENTE")
 
 
+async def crear_superadmin() -> UsuarioPrueba:
+    """Autentica el actor global que administra el catálogo de ciudades."""
+    email = os.getenv("TEST_SUPERADMIN_EMAIL", "superadmin@fashionstore.com")
+    clave = os.getenv("TEST_SUPERADMIN_PASSWORD", "Fashion123!")
+    token, usuario_id = await _login(email, clave)
+    return UsuarioPrueba(
+        await _nuevo_client(token), token, usuario_id, email, "SUPERADMIN"
+    )
+
+
+async def crear_ciudad_plataforma(nombre: str) -> dict:
+    """Crea una ciudad global usando el actor que exige el contrato actual."""
+    async with await crear_superadmin() as plataforma:
+        respuesta = await plataforma.client.post(
+            "/api/v1/ciudades", json={"nombre": nombre}
+        )
+        assert respuesta.status_code == 201, respuesta.text
+        return respuesta.json()
+
+
 async def crear_staff(admin: AsyncClient, rol: str, sucursal_id: str, tag: str = "c2") -> UsuarioPrueba:
     uid = _uid(8)
     email = f"{rol.lower()}.{tag}.{uid}@fashionstore.com"
@@ -113,12 +134,11 @@ async def crear_staff(admin: AsyncClient, rol: str, sucursal_id: str, tag: str =
 
 async def crear_sucursal(admin: AsyncClient, tag: str = "c2") -> str:
     uid = _uid()
-    resp_ciu = await admin.post("/api/v1/ciudades", json={"nombre": f"Ciudad C2 {tag} {uid}"})
-    assert resp_ciu.status_code == 201, resp_ciu.text
+    ciudad = await crear_ciudad_plataforma(f"Ciudad C2 {tag} {uid}")
     resp_suc = await admin.post(
         "/api/v1/sucursales",
         json={
-            "ciudad_id": resp_ciu.json()["id"],
+            "ciudad_id": ciudad["id"],
             "nombre": f"Sucursal C2 {tag} {uid}",
             "direccion": "Av. prueba 123",
             "numero_anillo": 4,
@@ -233,7 +253,14 @@ async def forzar_vencimiento(reserva_id: str, minutos_atras: int = 60) -> None:
     async with AsyncSessionLocal() as db:
         async with db.begin():
             await db.execute(
-                text("UPDATE comercial.reservas SET vence_en = now() - make_interval(mins => :m) WHERE id = :rid"),
+                text(
+                    "UPDATE comercial.reservas "
+                    "SET origen_plazo_en = CASE "
+                    "WHEN origen_plazo_en IS NULL THEN NULL "
+                    "ELSE now() - make_interval(mins => :m) - (vence_en - origen_plazo_en) "
+                    "END, vence_en = now() - make_interval(mins => :m) "
+                    "WHERE id = :rid"
+                ),
                 {"m": minutos_atras, "rid": reserva_id},
             )
 

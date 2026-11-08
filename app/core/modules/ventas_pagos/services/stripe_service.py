@@ -542,6 +542,7 @@ class StripeService:
                 await asyncio.sleep(0.05 * (intento + 1))
                 continue
             procesadas += len(ids)
+            break
         for vid in ids:
             try:
                 venta = await self._bloquear_venta(uuid.UUID(str(vid)))

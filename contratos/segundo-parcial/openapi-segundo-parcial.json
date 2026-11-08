@@ -8334,11 +8334,11 @@
     "/api/v1/carritos/mio/checkout": {
       "post": {
         "tags": [
-          "Carrito y Checkout CU14"
+          "Pedidos y Carrito CU21"
         ],
-        "summary": "Confirmar compra digital (CU14)",
-        "description": "Canal WEB o MOVIL, modalidad RECOJO o DELIVERY, una sola sucursal. Crea venta PENDIENTE_PAGO, compromete stock 60 min (SELECT FOR UPDATE ordenado + Kardex), congela precio/descuento/promoción/costo/tarifa y crea el pedido SOLICITADO. Si ninguna sucursal cubre todo o el carrito no tiene cobertura (409) sin efectos. Idempotencia por usuario: misma clave+usuario+payload devuelve la venta; distinto payload 409; otra venta del mismo UUID de otro propietario nunca se devuelve (409 IDEMPOTENCIA_AMBITO); se verifica que la venta pertenece al usuario actual.",
-        "operationId": "checkout_api_v1_carritos_mio_checkout_post",
+        "summary": "Checkout de carrito: crear pedido durable con oferta versionada (CU21)",
+        "description": "Acepta el contrato legado CU14 cuando el cuerpo incluye canal y devuelve venta_id con stock comprometido. Sin canal en el cuerpo crea un PedidoCompra durable CU21 con oferta versionada y estados de pago/cumplimiento separados, sin comprometer stock antes del pago. Requiere Idempotency-Key.",
+        "operationId": "checkout_pedido_compra_durable_cu21",
         "security": [
           {
             "HTTPBearer": []
@@ -8351,11 +8351,9 @@
             "required": false,
             "schema": {
               "type": "string",
-              "description": "Debe coincidir con datos.canal",
               "default": "WEB",
               "title": "Canal"
-            },
-            "description": "Debe coincidir con datos.canal"
+            }
           },
           {
             "name": "Idempotency-Key",
@@ -8379,7 +8377,15 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/CheckoutCrearDTO"
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/CheckoutCrearDTO"
+                  },
+                  {
+                    "$ref": "#/components/schemas/CheckoutCarritoDTO"
+                  }
+                ],
+                "title": "Datos"
               }
             }
           }
@@ -8390,7 +8396,15 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/CheckoutRespuestaDTO"
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/CheckoutRespuestaDTO"
+                    },
+                    {
+                      "$ref": "#/components/schemas/PedidoCompraDTO"
+                    }
+                  ],
+                  "title": "Response Checkout Pedido Compra Durable Cu21"
                 }
               }
             }
@@ -9973,6 +9987,289 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/carritos/mio/checkout-legado": {
+      "post": {
+        "tags": [
+          "Carrito y Checkout CU14"
+        ],
+        "summary": "Confirmar compra digital (CU14)",
+        "description": "Canal WEB o MOVIL, modalidad RECOJO o DELIVERY, una sola sucursal. Crea venta PENDIENTE_PAGO, compromete stock 60 min (SELECT FOR UPDATE ordenado + Kardex), congela precio/descuento/promoción/costo/tarifa y crea el pedido SOLICITADO. Si ninguna sucursal cubre todo o el carrito no tiene cobertura (409) sin efectos. Idempotencia por usuario: misma clave+usuario+payload devuelve la venta; distinto payload 409; otra venta del mismo UUID de otro propietario nunca se devuelve (409 IDEMPOTENCIA_AMBITO); se verifica que la venta pertenece al usuario actual.",
+        "operationId": "checkout_api_v1_carritos_mio_checkout_legado_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "canal",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "Debe coincidir con datos.canal",
+              "default": "WEB",
+              "title": "Canal"
+            },
+            "description": "Debe coincidir con datos.canal"
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Idempotency-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CheckoutCrearDTO"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CheckoutRespuestaDTO"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Solicitud inválida",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "detail": {
+                      "oneOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "codigo": {
+                              "type": "string"
+                            },
+                            "mensaje": {
+                              "type": "string"
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  }
+                },
+                "example": {
+                  "detail": {
+                    "codigo": "SOLICITUD_INVALIDA",
+                    "mensaje": "Datos inválidos"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sesión inválida o ausente",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "detail": {
+                      "oneOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "codigo": {
+                              "type": "string"
+                            },
+                            "mensaje": {
+                              "type": "string"
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  }
+                },
+                "example": {
+                  "detail": {
+                    "codigo": "NO_AUTENTICADO",
+                    "mensaje": "Sesión requerida"
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "RBAC: rol, propietario o sucursal no autorizado",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "detail": {
+                      "oneOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "codigo": {
+                              "type": "string"
+                            },
+                            "mensaje": {
+                              "type": "string"
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  }
+                },
+                "example": {
+                  "detail": {
+                    "codigo": "FORBIDDEN",
+                    "mensaje": "No autorizado"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Recurso no encontrado",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "detail": {
+                      "oneOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "codigo": {
+                              "type": "string"
+                            },
+                            "mensaje": {
+                              "type": "string"
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  }
+                },
+                "example": {
+                  "detail": {
+                    "codigo": "NO_ENCONTRADO",
+                    "mensaje": "Recurso no encontrado"
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflicto de negocio",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "detail": {
+                      "oneOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "codigo": {
+                              "type": "string"
+                            },
+                            "mensaje": {
+                              "type": "string"
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  }
+                },
+                "example": {
+                  "detail": {
+                    "codigo": "CONFLICTO_NEGOCIO",
+                    "mensaje": "Operación incompatible con el estado"
+                  }
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Payload o consentimiento inválido",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "detail": {
+                      "oneOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "codigo": {
+                              "type": "string"
+                            },
+                            "mensaje": {
+                              "type": "string"
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  }
+                },
+                "example": {
+                  "detail": {
+                    "codigo": "VALIDACION",
+                    "mensaje": "Payload inválido"
+                  }
                 }
               }
             }
@@ -14298,6 +14595,71 @@
         }
       }
     },
+    "/api/v1/cambios/mios": {
+      "get": {
+        "tags": [
+          "Cambios CU08"
+        ],
+        "summary": "Listar cambios propios (CU08)",
+        "operationId": "listar_mis_cambios_api_v1_cambios_mios_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "limite",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "default": 50,
+              "title": "Limite"
+            }
+          },
+          {
+            "name": "desplazamiento",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0,
+              "title": "Desplazamiento"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/CambioDTO"
+                  },
+                  "title": "Response Listar Mis Cambios Api V1 Cambios Mios Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/cambios": {
       "post": {
         "tags": [
@@ -15078,6 +15440,71 @@
                     "codigo": "CONFLICTO_NEGOCIO",
                     "mensaje": "Operación incompatible con el estado"
                   }
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/reembolsos/mios": {
+      "get": {
+        "tags": [
+          "Reembolsos CU27"
+        ],
+        "summary": "Listar reembolsos propios (CU27)",
+        "operationId": "listar_mis_reembolsos_api_v1_reembolsos_mios_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "limite",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "default": 50,
+              "title": "Limite"
+            }
+          },
+          {
+            "name": "desplazamiento",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0,
+              "title": "Desplazamiento"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ReembolsoDetalleDTO"
+                  },
+                  "title": "Response Listar Mis Reembolsos Api V1 Reembolsos Mios Get"
                 }
               }
             }
@@ -16242,6 +16669,71 @@
                     "codigo": "CONFLICTO_NEGOCIO",
                     "mensaje": "Operación incompatible con el estado"
                   }
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/devoluciones/mias": {
+      "get": {
+        "tags": [
+          "Devoluciones CU12/CU20"
+        ],
+        "summary": "Listar solicitudes de devolución propias (CU20)",
+        "operationId": "listar_mis_devoluciones_api_v1_devoluciones_mias_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "limite",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "default": 50,
+              "title": "Limite"
+            }
+          },
+          {
+            "name": "desplazamiento",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0,
+              "title": "Desplazamiento"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/DevolucionDTO"
+                  },
+                  "title": "Response Listar Mis Devoluciones Api V1 Devoluciones Mias Get"
                 }
               }
             }
@@ -20793,6 +21285,18 @@
               }
             ],
             "title": "Direccion"
+          },
+          "creado_en": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Creado En"
           },
           "detalles": {
             "items": {

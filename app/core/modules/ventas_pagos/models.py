@@ -263,10 +263,14 @@ class PedidoEntrega(Base):
     )
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    empresa_id = Column(
+        UUID(as_uuid=True), ForeignKey("organizacion.empresas.id"), nullable=False, index=True
+    )
     venta_id = Column(
         UUID(as_uuid=True), ForeignKey("comercial.ventas.id", ondelete="CASCADE"),
-        nullable=False, unique=True,
+        nullable=True, unique=True,
     )
+    cambio_id = Column(UUID(as_uuid=True), ForeignKey("comercial.cambios.id"), nullable=True)
     sucursal_id = Column(
         UUID(as_uuid=True), ForeignKey("organizacion.sucursales.id"), nullable=False
     )

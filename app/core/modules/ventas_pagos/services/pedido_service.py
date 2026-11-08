@@ -350,9 +350,56 @@ class PedidoService:
             lineas=lineas_dto,
         )
 
+    async def _reclamar_mutacion_carrito(
+        self, usuario: Usuario, clave: Optional[uuid.UUID], operacion: str, payload: dict
+    ) -> Optional[CarritoDurableDTO]:
+        if clave is None:
+            return None
+        previo = await reclamar(
+            self.db,
+            clave=clave,
+            hash_solicitud=hash_payload(payload),
+            recurso_tipo="CARRITO",
+            operacion=operacion,
+            usuario_id=usuario.id,
+        )
+        if previo is None:
+            return None
+        if previo.respuesta:
+            return CarritoDurableDTO.model_validate(previo.respuesta)
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="La operación con esta Idempotency-Key sigue en proceso",
+        )
+
+    async def _confirmar_mutacion_carrito(
+        self, usuario: Usuario, carrito: Carrito, clave: Optional[uuid.UUID], operacion: str
+    ) -> CarritoDurableDTO:
+        await self.db.flush()
+        salida = await self._a_carrito_dto(carrito)
+        if clave is not None:
+            await guardar_respuesta(
+                self.db,
+                clave,
+                salida.model_dump(mode="json"),
+                recurso_id=carrito.id,
+                usuario_id=usuario.id,
+                recurso_tipo="CARRITO",
+                operacion=operacion,
+            )
+        await self.db.commit()
+        return salida
+
     async def agregar_linea(
         self, usuario: Usuario, dto: LineaCarritoCrearDTO, canal: str, clave: Optional[uuid.UUID]
     ) -> CarritoDurableDTO:
+        operacion = "AGREGAR_LINEA_CU21"
+        previo = await self._reclamar_mutacion_carrito(
+            usuario, clave, operacion,
+            {"canal": canal, **dto.model_dump(mode="json")},
+        )
+        if previo is not None:
+            return previo
         if dto.cantidad <= 0:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cantidad debe ser mayor a cero")
 
@@ -383,12 +430,18 @@ class PedidoService:
             self.db.add(det)
 
         carrito.actualizada_en = self.reloj.ahora()
-        await self.db.commit()
-        return await self._a_carrito_dto(carrito)
+        return await self._confirmar_mutacion_carrito(usuario, carrito, clave, operacion)
 
     async def modificar_linea(
         self, usuario: Usuario, linea_id: uuid.UUID, dto: LineaCarritoModificarDTO, canal: str, clave: Optional[uuid.UUID]
     ) -> CarritoDurableDTO:
+        operacion = "MODIFICAR_LINEA_CU21"
+        previo = await self._reclamar_mutacion_carrito(
+            usuario, clave, operacion,
+            {"canal": canal, "linea_id": str(linea_id), **dto.model_dump(mode="json")},
+        )
+        if previo is not None:
+            return previo
         if dto.cantidad <= 0:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cantidad debe ser mayor a cero")
 
@@ -406,12 +459,18 @@ class PedidoService:
         det.cantidad = dto.cantidad
         det.actualizado_en = self.reloj.ahora()
         carrito.actualizada_en = self.reloj.ahora()
-        await self.db.commit()
-        return await self._a_carrito_dto(carrito)
+        return await self._confirmar_mutacion_carrito(usuario, carrito, clave, operacion)
 
     async def quitar_linea(
         self, usuario: Usuario, linea_id: uuid.UUID, canal: str, clave: Optional[uuid.UUID]
     ) -> CarritoDurableDTO:
+        operacion = "QUITAR_LINEA_CU21"
+        previo = await self._reclamar_mutacion_carrito(
+            usuario, clave, operacion,
+            {"canal": canal, "linea_id": str(linea_id)},
+        )
+        if previo is not None:
+            return previo
         carrito = await self.obtener_o_crear_carrito(usuario, canal)
         stmt = select(DetalleCarrito).where(
             DetalleCarrito.carrito_id == carrito.id,
@@ -423,8 +482,7 @@ class PedidoService:
 
         await self.db.delete(det)
         carrito.actualizada_en = self.reloj.ahora()
-        await self.db.commit()
-        return await self._a_carrito_dto(carrito)
+        return await self._confirmar_mutacion_carrito(usuario, carrito, clave, operacion)
 
     async def checkout(
         self, usuario: Usuario, dto: CheckoutCarritoDTO, canal: str, clave: uuid.UUID
