@@ -1994,4 +1994,3 @@ async def test_contraejemplo_p1_confirmar_orden_metadata_incompleta_rechaza_400(
     async with fabrica_sesiones() as db:
         op_check = await db.get(OrdenPago, orden_id)
         assert op_check.estado == "PENDIENTE"
-

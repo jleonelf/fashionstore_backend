@@ -1547,4 +1547,3 @@ async def test_intercalacion_stripe_efectivo_compromiso_stock(
             MovimientoInventario.tipo == "VENTA_PRESENCIAL",
         )
         assert (await db.execute(stmt_kv)).scalars().first() is not None
-
