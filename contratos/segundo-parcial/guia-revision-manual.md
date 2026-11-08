@@ -6,8 +6,8 @@ Cada CU exige prueba positiva, negativa de permiso/tenant y los escenarios espec
 |---|---|
 | CU01 | Alta duplicada con misma clave no duplica empresa/administrador.; A no lee ni modifica datos privados de B. |
 | CU02 | Básico rechaza tercera activa incluso con peticiones concurrentes.; Gracia/vencimiento no impiden registrar venta offline efectuada válidamente antes. |
-| CU03 | Descarga/reinicio sin conexión permite consultar CU16.; Ningún dato de clientes, costos privados o usuarios se filtra en copia pública. |
-| CU04 | Dos envíos producen una reserva y un apartado.; Vencida localmente no obtiene 24 h nuevas al sincronizar. |
+| CU03 | Descarga/reinicio sin conexión permite consultar CU16 en IndexedDB y SQLite; una descarga interrumpida conserva copia anterior.; Dos empresas/sucursales no se mezclan; ningún dato de clientes, costos privados o usuarios se filtra; colores compuestos y promociones por cantidad están completos. |
+| CU04 | Hora `America/La_Paz` -04:00 equivale al instante UTC correcto; política de referencia 8 h/5 min inicial versionada, límites exactos y cambio posterior de configuración.; Dos envíos producen una reserva y un apartado; vencida localmente no obtiene 24 h nuevas al sincronizar; referencia ajena/ausente y visita pasada no apartan stock; reinicio offline W/M conserva UUID. |
 | CU05 | Pedido cobrado sin stock conserva pago y genera un único reembolso íntegro.; Fallo o reintento no repite cobro, asignación, reembolso ni notificación. |
 | CU06 | Dos cajas concurrentes no reciben la misma unidad.; Flutter y PWA aplican mismo negocio y conservan habilitación al reiniciar. |
 | CU07 | Reinicio no pierde venta/efectivo/cupo; reenvío no duplica Kardex.; Caja perdida no libera stock por simple timeout. |
@@ -19,9 +19,9 @@ Cada CU exige prueba positiva, negativa de permiso/tenant y los escenarios espec
 | CU13 | Dos empresas pueden tener mismo correo normalizado sin mezclar cuentas.; Vencimiento 8 h oculta datos sin borrar pendientes. |
 | CU14 | Usuario de A no administra B aun con ID válido.; Rol revocado no borra efectivo/entrega válidos anteriores. |
 | CU15 | Límite activo resiste peticiones simultáneas.; Tarifa se congela en pedido aceptado, no altera entregas anteriores. |
-| CU16 | Filtro de color compuesto coincide en W/M y online/offline.; Promoción identifica umbral y no promete precio incondicional para una unidad. |
+| CU16 | Filtro de color compuesto y paginación coinciden en W/M y online/offline.; Promoción identifica umbral y no promete precio incondicional para una unidad; disponibilidad local muestra fecha/fuente; sin copia no se presenta catálogo vacío como vigente. |
 | CU17 | Venta/transferencia/devolución generan movimientos únicos con origen.; Asignar cupo disminuye libre; sincronizar su venta no descuenta físico dos veces. |
-| CU18 | Cancelación repetida no aumenta stock.; Carrera adelanto/expiración tiene una decisión consistente bajo bloqueo. |
+| CU18 | Cancelación repetida no aumenta stock; revisión obsoleta no muta.; Carrera adelanto/expiración/cancelación tiene una decisión consistente bajo bloqueo; misma reserva CU04 aceptada aparece en consulta propia, pendiente local no; origen 24/72 h sin reinicio. |
 | CU19 | Monto recibido - cambio = importe efectivo debido.; Pago mixto no duplica ingresos ni entrega antes de liquidación. |
 | CU20 | Misma unidad no se devuelve dos veces ni suma merma y reposición simultánea.; Parcialidad se refiere a unidades/importes elegibles, no retención automática del 50 %. |
 | CU21 | Pedido cobrado sin stock se deriva CU27 íntegro sin perder solicitud.; No mezclar carritos ni direcciones entre empresas. |

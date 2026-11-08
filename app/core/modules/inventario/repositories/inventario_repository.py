@@ -18,6 +18,8 @@ class InventarioRepository:
                     + InventarioSucursal.reservado
                     + InventarioSucursal.comprometido_traslado
                     + InventarioSucursal.en_transito
+                    + InventarioSucursal.comprometido_caja
+                    + InventarioSucursal.comprometido_digital
                 ),
                 0,
             )
@@ -124,12 +126,16 @@ class InventarioRepository:
         return list(result.scalars().all())
 
     async def porVarianteEnriquecido(self, variante_id: uuid.UUID) -> List[Dict[str, Any]]:
+        from backend.app.core.modules.catalogo.models import VarianteProducto
         query = (
             select(InventarioSucursal, Sucursal, Ciudad)
             .join(Sucursal, Sucursal.id == InventarioSucursal.sucursal_id)
             .join(Ciudad, Ciudad.id == Sucursal.ciudad_id)
+            .join(VarianteProducto, VarianteProducto.id == InventarioSucursal.variante_id)
             .where(
                 InventarioSucursal.variante_id == variante_id,
+                Sucursal.empresa_id == VarianteProducto.empresa_id,
+                Sucursal.activa == True,
                 InventarioSucursal.disponible > 0
             )
             .order_by(Sucursal.nombre)
@@ -162,10 +168,16 @@ class InventarioRepository:
         query = select(InventarioSucursal)
         if sucursal_id:
             query = query.where(InventarioSucursal.sucursal_id == sucursal_id)
+        if empresa_id:
+            query = query.where(Sucursal.empresa_id == empresa_id)
         result = await self.db.execute(query)
         return list(result.scalars().all())
 
-    async def existenciasEnriquecidas(self, sucursal_id: Optional[uuid.UUID] = None) -> List[Dict[str, Any]]:
+    async def existenciasEnriquecidas(
+        self,
+        sucursal_id: Optional[uuid.UUID] = None,
+        empresa_id: Optional[uuid.UUID] = None,
+    ) -> List[Dict[str, Any]]:
         from backend.app.core.modules.catalogo.models import VarianteProducto, Producto
         query = (
             select(InventarioSucursal, VarianteProducto, Producto, Sucursal, Ciudad)
@@ -176,14 +188,22 @@ class InventarioRepository:
         )
         if sucursal_id:
             query = query.where(InventarioSucursal.sucursal_id == sucursal_id)
+        if empresa_id:
+            query = query.where(Sucursal.empresa_id == empresa_id)
+        if empresa_id:
+            query = query.where(Sucursal.empresa_id == empresa_id)
         query = query.order_by(Sucursal.nombre, Producto.nombre)
         result = await self.db.execute(query)
         rows = result.all()
         lista: List[Dict[str, Any]] = []
         for inv, var, prod, suc, ciu in rows:
-            existencia_total = inv.disponible + inv.reservado + inv.comprometido_traslado + inv.en_transito
+            cupo_off = int(inv.comprometido_caja or 0)
+            comp_dig = int(inv.comprometido_digital or 0)
+            comp_cam = int(inv.comprometido_cambio or 0)
+            fisico = inv.disponible + inv.reservado + inv.comprometido_traslado + cupo_off + comp_dig + comp_cam
+            existencia_total = fisico + inv.en_transito
             costo_prom = float(var.costo_promedio or 0)
-            valorizado = existencia_total * costo_prom
+            valorizado = fisico * costo_prom
             margen_unit = float(var.precio or 0) - costo_prom
             lista.append({
                 "inventario_id": inv.id,
@@ -198,24 +218,36 @@ class InventarioRepository:
                 "reservado": inv.reservado,
                 "comprometido_traslado": inv.comprometido_traslado,
                 "en_transito": inv.en_transito,
+                "comprometido_caja": cupo_off,
+                "comprometido_digital": comp_dig,
+                "comprometido_cambio": comp_cam,
+                "fisico": fisico,
+                "libre": inv.disponible,
+                "cupo_offline": cupo_off,
                 "existencia_total": existencia_total,
                 "costo_promedio": costo_prom,
                 "costo_ultimo": float(var.costo_ultimo or 0),
                 "precio": float(var.precio or 0),
                 "valorizacion": round(valorizado, 2),
                 "margen_bruto_unitario": round(margen_unit, 2),
-                "margen_bruto_total": round(margen_unit * existencia_total, 2),
+                "margen_bruto_total": round(margen_unit * fisico, 2),
                 "actualizado_en": inv.actualizado_en,
             })
         return lista
 
-    async def valorizacionPorSucursal(self, sucursal_id: Optional[uuid.UUID] = None) -> List[Dict[str, Any]]:
+    async def valorizacionPorSucursal(
+        self,
+        sucursal_id: Optional[uuid.UUID] = None,
+        empresa_id: Optional[uuid.UUID] = None,
+    ) -> List[Dict[str, Any]]:
         from backend.app.core.modules.catalogo.models import VarianteProducto
         existencia_total_expr = (
             InventarioSucursal.disponible
             + InventarioSucursal.reservado
             + InventarioSucursal.comprometido_traslado
             + InventarioSucursal.en_transito
+            + InventarioSucursal.comprometido_caja
+            + InventarioSucursal.comprometido_digital
         )
         valorizacion_expr = existencia_total_expr * VarianteProducto.costo_promedio
         margen_expr = (VarianteProducto.precio - VarianteProducto.costo_promedio) * existencia_total_expr
@@ -241,6 +273,8 @@ class InventarioRepository:
         )
         if sucursal_id:
             query = query.where(InventarioSucursal.sucursal_id == sucursal_id)
+        if empresa_id:
+            query = query.where(Sucursal.empresa_id == empresa_id)
 
         result = await self.db.execute(query)
         rows = result.all()
@@ -260,8 +294,8 @@ class InventarioRepository:
             })
         return out
 
-    async def valorizacionGlobal(self) -> Dict[str, Any]:
-        por_sucursal = await self.valorizacionPorSucursal()
+    async def valorizacionGlobal(self, empresa_id: Optional[uuid.UUID] = None) -> Dict[str, Any]:
+        por_sucursal = await self.valorizacionPorSucursal(empresa_id=empresa_id)
         total_unidades = sum(s["total_unidades"] for s in por_sucursal)
         total_val = sum(s["valorizacion"] for s in por_sucursal)
         total_margen = sum(s["margen_bruto_total"] for s in por_sucursal)

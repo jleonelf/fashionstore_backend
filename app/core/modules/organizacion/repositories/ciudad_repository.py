@@ -1,6 +1,6 @@
 import uuid
 from typing import Optional, List
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from backend.app.core.modules.organizacion.models import Ciudad
 
@@ -32,3 +32,16 @@ class CiudadRepository:
         self.db.add(ciudad)
         await self.db.flush()
         return ciudad
+
+    async def actualizar(
+        self, ciudad_id: uuid.UUID, nombre: Optional[str] = None, activo: Optional[bool] = None
+    ) -> Optional[Ciudad]:
+        valores = {}
+        if nombre is not None:
+            valores["nombre"] = nombre.strip()
+        if activo is not None:
+            valores["activo"] = activo
+        if valores:
+            query = update(Ciudad).where(Ciudad.id == ciudad_id).values(**valores)
+            await self.db.execute(query)
+        return await self.buscarPorId(ciudad_id)

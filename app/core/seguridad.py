@@ -1,6 +1,6 @@
 import bcrypt
 from datetime import datetime, timedelta, timezone
-from typing import Optional, Any
+from typing import Optional, Any, List
 from jose import jwt
 from backend.app.core.config import settings
 
@@ -18,16 +18,32 @@ def generar_contrasenia_hash(contrasenia: str) -> str:
     hashed = bcrypt.hashpw(contrasenia.encode("utf-8"), salt)
     return hashed.decode("utf-8")
 
-def crear_token_acceso(sujeto: Any, rol: str, sucursal_id: Optional[Any] = None, expires_delta: Optional[timedelta] = None) -> str:
+def crear_token_acceso(
+    sujeto: Any,
+    rol: str,
+    sucursal_id: Optional[Any] = None,
+    empresa_id: Optional[Any] = None,
+    empresa_codigo: Optional[str] = None,
+    ambito: Optional[str] = None,
+    capacidades: Optional[List[str]] = None,
+    expires_delta: Optional[timedelta] = None,
+) -> str:
     if expires_delta:
         expire = datetime.now(timezone.utc) + expires_delta
     else:
         expire = datetime.now(timezone.utc) + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
     
+    if ambito is None:
+        ambito = "PLATAFORMA" if empresa_id is None else "EMPRESA"
+
     to_encode = {
         "exp": expire,
         "sub": str(sujeto),
-        "rol": rol
+        "rol": rol,
+        "empresa_id": str(empresa_id) if empresa_id else None,
+        "empresa_codigo": empresa_codigo,
+        "ambito": ambito,
+        "capacidades": capacidades or [],
     }
     if sucursal_id:
         to_encode["sucursal_id"] = str(sucursal_id)

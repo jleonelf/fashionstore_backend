@@ -6,13 +6,17 @@ from sqlalchemy import (
     String,
     Text,
     Integer,
+    BigInteger,
     Numeric,
     ForeignKey,
+    ForeignKeyConstraint,
     DateTime,
     UniqueConstraint,
     CheckConstraint,
+    Index,
+    text,
 )
-from sqlalchemy.dialects.postgresql import UUID, ENUM
+from sqlalchemy.dialects.postgresql import UUID, ENUM, JSONB
 from sqlalchemy.orm import relationship
 from backend.app.core.database import Base
 
@@ -63,17 +67,43 @@ class Reserva(Base):
             "codigo LIKE 'FS-%'",
             name="ck_reservas_codigo_formato",
         ),
+        CheckConstraint("revision >= 1", name="ck_reservas_revision"),
+        CheckConstraint(
+            "origen_plazo_en IS NULL OR vence_en >= origen_plazo_en",
+            name="ck_reservas_origen_plazo",
+        ),
+        CheckConstraint(
+            "operacion_sincronizacion_id IS NULL OR origen_plazo_en IS NOT NULL",
+            name="ck_reservas_operacion_origen",
+        ),
+        UniqueConstraint("id", "empresa_id", name="uq_reservas_id_empresa"),
+        UniqueConstraint(
+            "operacion_sincronizacion_id", name="uq_reservas_operacion_sincronizacion"
+        ),
+        ForeignKeyConstraint(
+            ["operacion_sincronizacion_id", "empresa_id"],
+            ["comercial.operaciones_sincronizacion.id", "comercial.operaciones_sincronizacion.empresa_id"],
+            name="fk_reservas_operacion_empresa",
+        ),
+        Index("uq_reservas_empresa_codigo", "empresa_id", "codigo", unique=True),
+        Index("ix_reservas_empresa_estado_vence", "empresa_id", "estado", "vence_en"),
         {"schema": "comercial"},
     )
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    empresa_id = Column(UUID(as_uuid=True), ForeignKey("organizacion.empresas.id"), nullable=False, index=True)
     cliente_id = Column(UUID(as_uuid=True), ForeignKey("seguridad.clientes.usuario_id"), nullable=False)
     sucursal_destino_id = Column(UUID(as_uuid=True), ForeignKey("organizacion.sucursales.id"), nullable=False)
-    codigo = Column(String(50), nullable=False, unique=True)
+    codigo = Column(String(50), nullable=False)
+    revision = Column(Integer, nullable=False, default=1)
     estado = Column(EstadoReserva, nullable=False, default="PENDIENTE")
     fecha_creacion = Column(DateTime(timezone=True), default=_ahora_utc, nullable=False)
     fecha_visita = Column(DateTime(timezone=True), nullable=True)
     vence_en = Column(DateTime(timezone=True), nullable=False)
+    origen_plazo_en = Column(DateTime(timezone=True), nullable=True)
+    operacion_sincronizacion_id = Column(
+        UUID(as_uuid=True), nullable=True,
+    )
     observacion = Column(Text, nullable=True)
     adelanto_modalidad = Column(String(20), nullable=True)
     adelanto_valor = Column(Numeric(12, 2), nullable=True)
@@ -121,6 +151,109 @@ class DetalleReserva(Base):
     reserva = relationship("Reserva", back_populates="detalles")
 
 
+class ReferenciaHoraria(Base):
+    __tablename__ = "referencias_horarias"
+    __table_args__ = (
+        CheckConstraint("emitida_en < vence_en", name="ck_referencias_horarias_vigencia"),
+        UniqueConstraint(
+            "id", "empresa_id", "usuario_id", "dispositivo_id",
+            name="uq_referencias_ambito",
+        ),
+        ForeignKeyConstraint(
+            ["usuario_id", "empresa_id"],
+            ["seguridad.usuarios.id", "seguridad.usuarios.empresa_id"],
+            name="fk_referencias_usuario_empresa",
+        ),
+        Index(
+            "uq_referencias_empresa_idempotencia",
+            "empresa_id",
+            "clave_idempotencia",
+            unique=True,
+            postgresql_where=text("clave_idempotencia IS NOT NULL"),
+        ),
+        Index(
+            "ix_referencias_usuario_dispositivo_vence",
+            "empresa_id", "usuario_id", "dispositivo_id", "vence_en",
+        ),
+        {"schema": "comercial"},
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    empresa_id = Column(UUID(as_uuid=True), ForeignKey("organizacion.empresas.id"), nullable=False)
+    usuario_id = Column(UUID(as_uuid=True), ForeignKey("seguridad.usuarios.id"), nullable=False)
+    dispositivo_id = Column(UUID(as_uuid=True), nullable=False)
+    emitida_en = Column(DateTime(timezone=True), nullable=False)
+    vence_en = Column(DateTime(timezone=True), nullable=False)
+    hora_local_en = Column(DateTime(timezone=True), nullable=True)
+    tolerancia_segundos = Column(Integer, nullable=False, default=300)
+    politica_version = Column(Integer, nullable=False, default=1)
+    desfase_segundos = Column(Integer, nullable=True)
+    clave_idempotencia = Column(UUID(as_uuid=True), nullable=True)
+    hash_solicitud = Column(String(64), nullable=True)
+
+
+class OperacionSincronizacion(Base):
+    __tablename__ = "operaciones_sincronizacion"
+    __table_args__ = (
+        CheckConstraint("version_esquema > 0", name="ck_operaciones_version"),
+        CheckConstraint("secuencia_local > 0", name="ck_operaciones_secuencia"),
+        CheckConstraint("revision > 0", name="ck_operaciones_revision"),
+        CheckConstraint(
+            "hash_solicitud ~ '^[0-9a-f]{64}$'", name="ck_operaciones_hash"
+        ),
+        CheckConstraint(
+            "tipo IN ('SOLICITAR_RESERVA','SOLICITAR_COMPRA','REGISTRAR_VENTA_CAJA')",
+            name="ck_operaciones_tipo",
+        ),
+        CheckConstraint(
+            "estado IN ('ACEPTADA','RECHAZADA','REQUIERE_ACEPTACION_PRECIO',"
+            "'PENDIENTE_PAGO','REGISTRADA_CENTRAL','CONCILIACION_REQUERIDA','CONFLICTO')",
+            name="ck_operaciones_estado",
+        ),
+        CheckConstraint(
+            "estado <> 'ACEPTADA' OR (aceptada_en IS NOT NULL AND recurso_id IS NOT NULL)",
+            name="ck_operaciones_aceptacion",
+        ),
+        UniqueConstraint("empresa_id", "usuario_id", "operacion_id", name="uq_operaciones_actor_uuid"),
+        UniqueConstraint("id", "empresa_id", name="uq_operaciones_id_empresa"),
+        ForeignKeyConstraint(
+            ["usuario_id", "empresa_id"],
+            ["seguridad.usuarios.id", "seguridad.usuarios.empresa_id"],
+            name="fk_operaciones_usuario_empresa",
+        ),
+        ForeignKeyConstraint(
+            ["referencia_horaria_id", "empresa_id", "usuario_id", "dispositivo_id"],
+            ["comercial.referencias_horarias.id", "comercial.referencias_horarias.empresa_id",
+             "comercial.referencias_horarias.usuario_id", "comercial.referencias_horarias.dispositivo_id"],
+            name="fk_operaciones_referencia",
+        ),
+        Index("ix_operaciones_actor_recibida", "empresa_id", "usuario_id", "recibida_en"),
+        Index("ix_operaciones_recurso", "tipo", "recurso_id", postgresql_where="recurso_id IS NOT NULL"),
+        {"schema": "comercial"},
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    empresa_id = Column(UUID(as_uuid=True), ForeignKey("organizacion.empresas.id"), nullable=False)
+    usuario_id = Column(UUID(as_uuid=True), ForeignKey("seguridad.usuarios.id"), nullable=False)
+    operacion_id = Column(UUID(as_uuid=True), nullable=False)
+    tipo = Column(String(40), nullable=False)
+    version_esquema = Column(Integer, nullable=False)
+    dispositivo_id = Column(UUID(as_uuid=True), nullable=False)
+    secuencia_local = Column(BigInteger, nullable=False)
+    creada_local_en = Column(DateTime(timezone=True), nullable=False)
+    recibida_en = Column(DateTime(timezone=True), nullable=False)
+    aceptada_en = Column(DateTime(timezone=True), nullable=True)
+    referencia_horaria_id = Column(UUID(as_uuid=True), nullable=True)
+    hash_solicitud = Column(String(64), nullable=False)
+    solicitud = Column(JSONB, nullable=False)
+    estado = Column(String(40), nullable=False)
+    codigo = Column(String(40), nullable=False)
+    detalle = Column(Text, nullable=False)
+    resultado = Column(JSONB, nullable=False)
+    recurso_id = Column(UUID(as_uuid=True), nullable=True)
+    revision = Column(Integer, nullable=False, default=1)
+
+
 class Traslado(Base):
     __tablename__ = "traslados"
     __table_args__ = (
@@ -128,10 +261,12 @@ class Traslado(Base):
             "sucursal_origen_id <> sucursal_destino_id",
             name="ck_traslados_origen_destino_distintos",
         ),
+        UniqueConstraint("id", "empresa_id", name="uq_traslados_id_empresa"),
         {"schema": "inventario"},
     )
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    empresa_id = Column(UUID(as_uuid=True), ForeignKey("organizacion.empresas.id"), nullable=False, index=True)
     reserva_id = Column(UUID(as_uuid=True), ForeignKey("comercial.reservas.id"), nullable=True)
     sucursal_origen_id = Column(UUID(as_uuid=True), ForeignKey("organizacion.sucursales.id"), nullable=False)
     sucursal_destino_id = Column(UUID(as_uuid=True), ForeignKey("organizacion.sucursales.id"), nullable=False)

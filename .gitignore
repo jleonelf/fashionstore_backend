@@ -39,3 +39,6 @@ postgres_data/
 backups/
 *.sqlite3
 *.db
+
+# Modelos y resultados generados localmente
+/artefactos/

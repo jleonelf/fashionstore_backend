@@ -1,4 +1,10 @@
-"""Corrección 8 — OpenAPI completo: errores de negocio + comparación canónica."""
+"""Corrección 8 — OpenAPI completo: errores de negocio + compatibilidad histórica.
+
+El contrato del segundo parcial agrega rutas y campos; la exportación histórica
+del Ciclo 3 se conserva intacta y debe seguir siendo un subconjunto válido.
+La instantánea vigente se compara en
+``tests_segundo_parcial_bloque_b/test_openapi_segundo_parcial.py``.
+"""
 import json
 from pathlib import Path
 
@@ -30,10 +36,19 @@ def test_errores_stripe_y_decart():
     assert "Idempotency-Key" in aut.get("description", "")
 
 
-def test_openapi_coincide_con_exportado():
+def test_openapi_conserva_contrato_ciclo3():
     spec = _spec()
     ruta = Path(__file__).resolve().parent.parent.parent / "docu_general" / "ciclo-3" / "openapi-ciclo3.json"
     assert ruta.exists(), f"falta {ruta}"
     exportado = json.loads(ruta.read_text(encoding="utf-8"))
-    canon = lambda o: json.dumps(o, sort_keys=True, separators=(",", ":"), default=str)
-    assert canon(exportado) == canon(spec), "openapi-ciclo3.json desincronizado: regenere con app.openapi()"
+
+    for camino, operaciones in exportado["paths"].items():
+        assert camino in spec["paths"], f"se eliminó la ruta histórica {camino}"
+        for metodo in operaciones:
+            assert metodo in spec["paths"][camino], (
+                f"se eliminó la operación histórica {metodo.upper()} {camino}"
+            )
+    for nombre in exportado["components"]["schemas"]:
+        assert nombre in spec["components"]["schemas"], (
+            f"se eliminó el esquema histórico {nombre}"
+        )

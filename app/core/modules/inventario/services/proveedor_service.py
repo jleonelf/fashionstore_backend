@@ -7,11 +7,14 @@ from backend.app.core.modules.inventario.schemas import ProveedorCrearDTO, Prove
 from backend.app.core.modules.inventario.repositories.proveedor_repository import ProveedorRepository
 
 class ProveedorService:
-    def __init__(self, db: AsyncSession):
+    def __init__(self, db: AsyncSession, empresa_id: uuid.UUID | None = None):
         self.db = db
-        self.proveedor_repo = ProveedorRepository(db)
+        self.empresa_id = empresa_id
+        self.proveedor_repo = ProveedorRepository(db, empresa_id=empresa_id)
 
     async def crear(self, dto: ProveedorCrearDTO) -> ProveedorDTO:
+        if self.empresa_id is None:
+            raise HTTPException(status_code=400, detail="Usuario sin empresa asignada")
         if dto.nit:
             existente_nit = await self.proveedor_repo.buscarPorNit(dto.nit)
             if existente_nit:
@@ -20,6 +23,7 @@ class ProveedorService:
                     detail=f"Ya existe un proveedor con NIT '{dto.nit.strip()}'"
                 )
         nuevo = Proveedor(
+            empresa_id=self.empresa_id,
             razon_social=dto.razon_social.strip(),
             nit=dto.nit.strip() if dto.nit else None,
             contacto=dto.contacto.strip() if dto.contacto else None,

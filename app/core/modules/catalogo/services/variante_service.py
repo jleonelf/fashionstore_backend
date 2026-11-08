@@ -4,7 +4,7 @@ from fastapi import HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import IntegrityError
 from backend.app.core.modules.catalogo.models import VarianteProducto
-from backend.app.core.modules.catalogo.schemas import VarianteCrearDTO, VarianteDTO, VarianteActualizarDTO
+from backend.app.core.modules.catalogo.schemas import VarianteCrearDTO, VarianteDTO, VarianteActualizarDTO, VariantePublicaDTO
 from backend.app.core.modules.catalogo.repositories.variante_repository import VarianteRepository
 from backend.app.core.modules.catalogo.repositories.producto_repository import ProductoRepository
 from backend.app.core.modules.catalogo.repositories.maestro_repository import MaestroRepository
@@ -15,27 +15,30 @@ class VarianteService:
     Presentación gestionarVariantes() -> Controller VarianteService.crear() -> Datos VarianteRepository.crear()
     UQ enforcement 409 Conflict si duplica producto+talla+color, sku único, codigo_barras único.
     """
-    def __init__(self, db: AsyncSession):
+    def __init__(self, db: AsyncSession, empresa_id: uuid.UUID | None = None):
         self.db = db
+        self.empresa_id = empresa_id
         self.variante_repo = VarianteRepository(db)
         self.producto_repo = ProductoRepository(db)
         self.maestro_repo = MaestroRepository(db)
 
     async def crear(self, dto: VarianteCrearDTO) -> VarianteDTO:
-        producto = await self.producto_repo.buscarPorId(dto.producto_id)
+        if self.empresa_id is None:
+            raise HTTPException(status_code=400, detail="Usuario sin empresa asignada")
+        producto = await self.producto_repo.buscarPorId(dto.producto_id, empresa_id=self.empresa_id)
         if not producto:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Producto no encontrado")
         if not producto.activo:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Producto inactivo, no se pueden crear variantes")
 
         talla = await self.maestro_repo.buscarTallaPorId(dto.talla_id)
-        if not talla:
+        if not talla or talla.empresa_id != self.empresa_id:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Talla no encontrada")
         if not talla.activo:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Talla inactiva")
 
         color = await self.maestro_repo.buscarColorPorId(dto.color_id)
-        if not color:
+        if not color or color.empresa_id != self.empresa_id:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Color no encontrado")
         if not color.activo:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Color inactivo")
@@ -54,6 +57,7 @@ class VarianteService:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Ya existe una variante para la combinación producto+talla+color")
 
         variante = VarianteProducto(
+            empresa_id=self.empresa_id,
             producto_id=dto.producto_id,
             talla_id=dto.talla_id,
             color_id=dto.color_id,
@@ -89,19 +93,59 @@ class VarianteService:
 
         return VarianteDTO.model_validate(variante)
 
-    async def listar(self, producto_id: Optional[uuid.UUID] = None, solo_activas: bool = False, limit: int = 50, offset: int = 0) -> List[VarianteDTO]:
-        variantes = await self.variante_repo.listar(producto_id=producto_id, solo_activas=solo_activas, limit=limit, offset=offset)
+    async def listar(
+        self,
+        producto_id: Optional[uuid.UUID] = None,
+        solo_activas: bool = False,
+        limit: int = 50,
+        offset: int = 0,
+        empresa_id: Optional[uuid.UUID] = None,
+    ) -> List[VarianteDTO]:
+        variantes = await self.variante_repo.listar(
+            producto_id=producto_id,
+            solo_activas=solo_activas,
+            limit=limit,
+            offset=offset,
+            empresa_id=empresa_id,
+        )
         return [VarianteDTO.model_validate(v) for v in variantes]
 
-    async def obtenerPorId(self, variante_id: uuid.UUID) -> VarianteDTO:
+    async def listarPublico(
+        self,
+        producto_id: Optional[uuid.UUID] = None,
+        solo_activas: bool = True,
+        limit: int = 50,
+        offset: int = 0,
+        empresa_id: Optional[uuid.UUID] = None,
+    ) -> List[VariantePublicaDTO]:
+        variantes = await self.variante_repo.listar(
+            producto_id=producto_id,
+            solo_activas=solo_activas,
+            limit=limit,
+            offset=offset,
+            empresa_id=empresa_id,
+        )
+        return [VariantePublicaDTO.model_validate(v) for v in variantes]
+
+    async def obtenerPorId(self, variante_id: uuid.UUID, empresa_id: Optional[uuid.UUID] = None) -> VarianteDTO:
         variante = await self.variante_repo.buscarPorId(variante_id)
-        if not variante:
+        if not variante or (empresa_id and variante.empresa_id != empresa_id):
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Variante no encontrada")
         return VarianteDTO.model_validate(variante)
 
-    async def actualizar(self, variante_id: uuid.UUID, dto: VarianteActualizarDTO) -> VarianteDTO:
+    async def obtenerPublicaPorId(self, variante_id: uuid.UUID, empresa_id: Optional[uuid.UUID] = None) -> VariantePublicaDTO:
         variante = await self.variante_repo.buscarPorId(variante_id)
-        if not variante:
+        if not variante or not variante.activa:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Variante no encontrada")
+        if empresa_id and variante.empresa_id != empresa_id:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Variante no encontrada")
+        return VariantePublicaDTO.model_validate(variante)
+
+    async def actualizar(self, variante_id: uuid.UUID, dto: VarianteActualizarDTO) -> VarianteDTO:
+        if self.empresa_id is None:
+            raise HTTPException(status_code=400, detail="Usuario sin empresa asignada")
+        variante = await self.variante_repo.buscarPorId(variante_id)
+        if not variante or variante.empresa_id != self.empresa_id:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Variante no encontrada")
 
         if "sku" in dto.model_fields_set and dto.sku is not None:

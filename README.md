@@ -98,6 +98,25 @@ Ejecutar las migraciones con Alembic para inicializar las tablas:
 alembic upgrade head
 ```
 
+### Push Firebase en local y Render
+
+El JSON privado de la cuenta de servicio Firebase se guarda fuera de Git.
+Para desarrollo local, definir `GOOGLE_APPLICATION_CREDENTIALS` en `backend/.env`
+con la ruta absoluta del archivo. Para Render, subir el JSON en **Environment →
+Secret Files** como `firebase-service-account.json` y definir
+`GOOGLE_APPLICATION_CREDENTIALS=/etc/secrets/firebase-service-account.json`.
+También se admite `FCM_SERVICE_ACCOUNT_JSON` con el contenido completo como
+variable secreta de Render; no se requieren ambas opciones. `project_id` se
+obtiene del propio JSON.
+
+El worker que entrega las notificaciones del outbox se activa con
+`EXPIRACION_JOB_ACTIVO=true`. Ejecutarlo en una sola instancia del backend.
+Para Web Push, configurar además `VAPID_PRIVATE_KEY`, `VAPID_PUBLIC_KEY` y
+`VAPID_SUBJECT`. Estas claves VAPID son independientes de Firebase.
+
+Antes del despliegue, aplicar `alembic upgrade head` en Neon y comprobar
+`public.alembic_version`. Subir el código a GitHub no ejecuta migraciones.
+
 ---
 
 ## Ejecución del Servidor

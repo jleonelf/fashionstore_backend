@@ -13,6 +13,8 @@ from backend.app.main import app as aplicacion
 from backend.app.core.database import AsyncSessionLocal
 from backend.app.core.modules.catalogo.models import Categoria, Color, Producto, Talla, VarianteProducto
 
+EMPRESA_TEST_ID = uuid.UUID("0ddf24a9-edeb-510f-b8e2-22d41847f477")
+
 
 def _uid(n: int = 6) -> str:
     return uuid.uuid4().hex[:n]
@@ -69,6 +71,7 @@ async def crear_cliente(tag: str = "c2") -> UsuarioPrueba:
         resp = await anon.post(
             "/api/v1/clientes",
             json={
+                "empresa_codigo": "fashionstore",
                 "nombres": f"Cliente {tag}",
                 "apellidos": f"Prueba {uid}",
                 "correo_electronico": email,
@@ -146,12 +149,13 @@ async def crear_variante_con_stock(
     uid = _uid()
     async with AsyncSessionLocal() as db:
         async with db.begin():
-            talla = Talla(nombre=f"T-C2-{tag}-{uid}", orden=1, activo=True)
-            color = Color(nombre=f"Color C2 {tag} {uid}", codigo_hex="#AABBCC", activo=True)
-            categoria = Categoria(nombre=f"Cat C2 {tag} {uid}", activo=True)
+            talla = Talla(empresa_id=EMPRESA_TEST_ID, nombre=f"T-C2-{tag}-{uid}", orden=1, activo=True)
+            color = Color(empresa_id=EMPRESA_TEST_ID, nombre=f"Color C2 {tag} {uid}", codigo_hex="#AABBCC", activo=True)
+            categoria = Categoria(empresa_id=EMPRESA_TEST_ID, nombre=f"Cat C2 {tag} {uid}", activo=True)
             db.add_all([talla, color, categoria])
             await db.flush()
             producto = Producto(
+                empresa_id=EMPRESA_TEST_ID,
                 categoria_id=categoria.id,
                 nombre=f"Producto C2 {tag} {uid}",
                 precio_base=Decimal(precio),
@@ -160,6 +164,7 @@ async def crear_variante_con_stock(
             db.add(producto)
             await db.flush()
             variante = VarianteProducto(
+                empresa_id=EMPRESA_TEST_ID,
                 producto_id=producto.id,
                 talla_id=talla.id,
                 color_id=color.id,

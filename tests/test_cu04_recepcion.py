@@ -6,6 +6,7 @@ from sqlalchemy import select
 from backend.app.core.database import AsyncSessionLocal
 from backend.app.core.modules.catalogo.models import Categoria, Talla, Color, Producto, VarianteProducto
 from backend.app.core.modules.inventario.models import InventarioSucursal, MovimientoInventario
+from tests.helpers_ciclo2 import EMPRESA_TEST_ID
 
 async def _obtener_ciudad_sucursal(cliente_http):
     # Intentar usar sucursal existente, si no crear nueva
@@ -58,7 +59,7 @@ async def _crear_producto_variante(sku_suffix: str):
         res_cat = await db.execute(select(Categoria).limit(1))
         cat = res_cat.scalars().first()
         if not cat:
-            cat = Categoria(nombre=f"Cat CU04 {sku_suffix}", activo=True)
+            cat = Categoria(empresa_id=EMPRESA_TEST_ID, nombre=f"Cat CU04 {sku_suffix}", activo=True)
             db.add(cat)
             await db.flush()
         res_talla = await db.execute(select(Talla).limit(1))
@@ -67,6 +68,7 @@ async def _crear_producto_variante(sku_suffix: str):
         color = res_color.scalars().first()
         # Crear producto
         producto = Producto(
+            empresa_id=EMPRESA_TEST_ID,
             categoria_id=cat.id,
             nombre=f"Producto CU04 {sku_suffix}",
             descripcion="Producto de prueba CU04",
@@ -79,6 +81,7 @@ async def _crear_producto_variante(sku_suffix: str):
         await db.flush()
         sku = f"SKU-CU04-{sku_suffix}-{uuid.uuid4().hex[:6].upper()}"
         variante = VarianteProducto(
+            empresa_id=EMPRESA_TEST_ID,
             producto_id=producto.id,
             talla_id=talla.id,
             color_id=color.id,

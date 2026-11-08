@@ -146,6 +146,14 @@ async def reclamar(
                     "mensaje": "Idempotency-Key ya usada con otra solicitud",
                 },
             )
+        if not ganador.respuesta:
+            import asyncio
+            for _ in range(40):
+                await asyncio.sleep(0.05)
+                db.expire_all()
+                ganador = await _buscar(db, clave, usuario_id, recurso_tipo, operacion)
+                if ganador and ganador.respuesta:
+                    break
         return ganador
 
 

@@ -14,6 +14,7 @@ from sqlalchemy import (
     UniqueConstraint,
     CheckConstraint,
     Index,
+    text,
 )
 from sqlalchemy.dialects.postgresql import UUID, ENUM, JSONB
 from sqlalchemy.orm import relationship
@@ -48,11 +49,14 @@ class Venta(Base):
         CheckConstraint("costo_entrega >= 0", name="ck_ventas_costo_entrega_nneg"),
         CheckConstraint("total >= 0", name="ck_ventas_total_nneg"),
         CheckConstraint("adelanto_descontado >= 0", name="ck_ventas_adelanto_desc_nneg"),
+        UniqueConstraint("id", "empresa_id", name="uq_ventas_id_empresa"),
+        Index("uq_ventas_empresa_numero", "empresa_id", "numero", unique=True),
         {"schema": "comercial"},
     )
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    numero = Column(String(50), nullable=False, unique=True)
+    empresa_id = Column(UUID(as_uuid=True), ForeignKey("organizacion.empresas.id"), nullable=False, index=True)
+    numero = Column(String(50), nullable=False)
     cliente_id = Column(UUID(as_uuid=True), ForeignKey("seguridad.clientes.usuario_id"), nullable=True)
     reserva_id = Column(UUID(as_uuid=True), ForeignKey("comercial.reservas.id"), nullable=True)
     sucursal_id = Column(UUID(as_uuid=True), ForeignKey("organizacion.sucursales.id"), nullable=False)
@@ -69,6 +73,11 @@ class Venta(Base):
     adelanto_descontado = Column(Numeric(12, 2), nullable=False, default=0)
     clave_idempotencia = Column(UUID(as_uuid=True), nullable=True, unique=True)
     hash_solicitud = Column(Text, nullable=True)
+    pedido_compra_id = Column(UUID(as_uuid=True), nullable=True)
+    turno_caja_id = Column(UUID(as_uuid=True), ForeignKey("comercial.turnos_caja.id"), nullable=True)
+    vendida_local_en = Column(DateTime(timezone=True), nullable=True)
+    recibida_central_en = Column(DateTime(timezone=True), nullable=True)
+    entregada_en = Column(DateTime(timezone=True), nullable=True)
 
     detalles = relationship("DetalleVenta", back_populates="venta", cascade="all, delete-orphan")
 
@@ -122,14 +131,26 @@ class Pago(Base):
             name="ck_pagos_contexto_referencia",
         ),
         CheckConstraint(
+            "(contexto = 'RESERVA' AND reserva_id IS NOT NULL AND venta_id IS NULL) OR "
+            "(contexto = 'VENTA' AND venta_id IS NOT NULL AND reserva_id IS NULL)",
+            name="ck_pagos_un_solo_recurso",
+        ),
+        CheckConstraint(
             "metodo IN ('EFECTIVO','TARJETA_CAJA','QR_CAJA','TRANSFERENCIA','STRIPE_TEST')",
             name="ck_pagos_metodo",
         ),
         CheckConstraint("monto > 0", name="ck_pagos_monto_pos"),
+        Index(
+            "uq_pagos_empresa_prov_ref",
+            "empresa_id", "proveedor_pago", "referencia_externa",
+            unique=True,
+            postgresql_where=text("referencia_externa IS NOT NULL"),
+        ),
         {"schema": "comercial"},
     )
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    empresa_id = Column(UUID(as_uuid=True), ForeignKey("organizacion.empresas.id"), nullable=False, index=True)
     contexto = Column(String(20), nullable=False)
     reserva_id = Column(UUID(as_uuid=True), ForeignKey("comercial.reservas.id"), nullable=True)
     venta_id = Column(UUID(as_uuid=True), ForeignKey("comercial.ventas.id"), nullable=True)
@@ -144,6 +165,8 @@ class Pago(Base):
     pagado_en = Column(DateTime(timezone=True), nullable=True)
     clave_idempotencia = Column(UUID(as_uuid=True), nullable=True, unique=True)
     hash_solicitud = Column(Text, nullable=True)
+    efectivo_recibido_bob = Column(Numeric(14, 2), nullable=True)
+    cambio_entregado_bob = Column(Numeric(14, 2), nullable=True)
 
 
 class Carrito(Base):
@@ -164,10 +187,12 @@ class Carrito(Base):
             postgresql_where="estado = 'ACTIVO'",
         ),
         Index("idx_carritos_cliente_estado", "cliente_id", "estado"),
+        UniqueConstraint("id", "empresa_id", name="uq_carritos_id_empresa"),
         {"schema": "comercial"},
     )
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    empresa_id = Column(UUID(as_uuid=True), ForeignKey("organizacion.empresas.id"), nullable=False, index=True)
     cliente_id = Column(
         UUID(as_uuid=True), ForeignKey("seguridad.clientes.usuario_id"), nullable=False
     )
@@ -284,6 +309,55 @@ class RegistroIdempotencia(Base):
     expira_en = Column(DateTime(timezone=True), nullable=True)
 
 
+
+
+class TurnoCaja(Base):
+    __tablename__ = "turnos_caja"
+    __table_args__ = (
+        UniqueConstraint("id", "empresa_id", name="uq_turnos_caja_id_empresa"),
+        {"schema": "comercial"},
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    empresa_id = Column(UUID(as_uuid=True), ForeignKey("organizacion.empresas.id"), nullable=False, index=True)
+    sucursal_id = Column(UUID(as_uuid=True), ForeignKey("organizacion.sucursales.id"), nullable=False)
+    cajero_id = Column(UUID(as_uuid=True), ForeignKey("seguridad.usuarios.id"), nullable=False)
+    dispositivo_id = Column(UUID(as_uuid=True), nullable=False)
+    caja_codigo = Column(String(80), nullable=False)
+    estado = Column(String(20), nullable=False, default="ABIERTO")
+    inicio_en = Column(DateTime(timezone=True), nullable=False)
+    vence_en = Column(DateTime(timezone=True), nullable=False)
+    version_precios = Column(String(80), nullable=False)
+    cupos_hash = Column(String(64), nullable=False)
+    revision = Column(Integer, nullable=False, default=1)
+    creado_en = Column(DateTime(timezone=True), default=_ahora_utc, nullable=False)
+    cerrado_en = Column(DateTime(timezone=True), nullable=True)
+    cerrado_por_id = Column(UUID(as_uuid=True), ForeignKey("seguridad.usuarios.id"), nullable=True)
+    motivo_supervision = Column(Text, nullable=True)
+    supervision_forzada = Column(Boolean, nullable=False, default=False)
+    arqueo_declarado_bob = Column(Numeric(14, 2), nullable=True)
+    evidencia_cierre = Column(JSONB, nullable=True)
+    ajustes_inventario = Column(JSONB, nullable=True)
+
+
+class TurnoCajaEvento(Base):
+    """Rastro append-only de cierres y decisiones de supervisiÃ³n de caja."""
+    __tablename__ = "turnos_caja_eventos"
+    __table_args__ = (
+        UniqueConstraint("turno_id", "revision", name="uq_turnos_caja_eventos_turno_revision"),
+        {"schema": "comercial"},
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    turno_id = Column(UUID(as_uuid=True), ForeignKey("comercial.turnos_caja.id"), nullable=False, index=True)
+    empresa_id = Column(UUID(as_uuid=True), ForeignKey("organizacion.empresas.id"), nullable=False, index=True)
+    actor_id = Column(UUID(as_uuid=True), ForeignKey("seguridad.usuarios.id"), nullable=False)
+    revision = Column(Integer, nullable=False)
+    tipo = Column(String(40), nullable=False)
+    datos = Column(JSONB, nullable=False, default=dict)
+    creado_en = Column(DateTime(timezone=True), default=_ahora_utc, nullable=False)
+
+
 __all__ = [
     "EstadoVenta",
     "Venta",
@@ -293,4 +367,6 @@ __all__ = [
     "DetalleCarrito",
     "PedidoEntrega",
     "RegistroIdempotencia",
+    "TurnoCaja",
+    "TurnoCajaEvento",
 ]

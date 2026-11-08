@@ -1,14 +1,15 @@
-"""Controller ReporteService — CU23 (RF24)."""
+"""Controller ReporteService — CU25 (Ventas por Sucursal con fecha central y física Bolivia)."""
 import uuid
 from datetime import datetime
 from decimal import Decimal
 from typing import Optional
 
 from fastapi import HTTPException, status
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.core.permisos import es_admin, exigir_sucursal
-from backend.app.core.reloj import entrada_local_a_utc
+from backend.app.core.reloj import a_hora_bolivia, entrada_local_a_utc
 from backend.app.core.modules.identidad_empresas.models import Usuario
 from backend.app.core.modules.organizacion.repositories.sucursal_repository import SucursalRepository
 from backend.app.core.modules.ventas_pagos.repositories.venta_repository import VentaRepository
@@ -51,25 +52,82 @@ class ReporteService:
         items = []
         unidades = 0
         monto = Decimal("0")
+        subtotal_bruto = Decimal("0")
+        total_descuentos = Decimal("0")
         costo = Decimal("0")
         for v in ventas:
             uds = sum(d.cantidad for d in v.detalles)
             cto = sum(Decimal(str(d.costo_promedio or 0)) * d.cantidad for d in v.detalles)
             unidades += uds
             monto += Decimal(str(v.total or 0))
+            subtotal_bruto += Decimal(str(v.subtotal or v.total or 0))
+            total_descuentos += Decimal(str(v.descuento or 0))
             costo += cto
+            fecha_central = getattr(v, "recibida_central_en", None) or v.creada_en
+            fecha_local = getattr(v, "vendida_local_en", None) or v.creada_en
             items.append(
                 VentaSucursalItemDTO(
-                    id=v.id, numero=v.numero, creada_en=v.creada_en,
-                    cliente_id=v.cliente_id, reserva_id=v.reserva_id,
+                    id=v.id,
+                    numero=v.numero,
+                    creada_en=v.creada_en,
+                    fecha_central=fecha_central,
+                    fecha_fisica_local=a_hora_bolivia(fecha_local),
+                    cliente_id=v.cliente_id,
+                    reserva_id=v.reserva_id,
                     canal=v.canal if isinstance(v.canal, str) else str(v.canal),
                     estado=v.estado if isinstance(v.estado, str) else v.estado.name,
-                    unidades=uds, subtotal=v.subtotal, descuento=v.descuento,
-                    adelanto_descontado=v.adelanto_descontado, total=v.total,
+                    unidades=uds,
+                    subtotal=v.subtotal,
+                    descuento=v.descuento,
+                    adelanto_descontado=v.adelanto_descontado,
+                    total=v.total,
                     costo_total=cto if con_costos else None,
                     margen_bruto=(Decimal(str(v.total or 0)) - cto) if con_costos else None,
                 )
             )
+
+        total_devoluciones = Decimal("0.00")
+        total_reembolsos = Decimal("0.00")
+        if ventas:
+            v_ids = [v.id for v in ventas]
+            try:
+                from backend.app.core.modules.posventa.services.devolucion_service import Devolucion, DetalleDevolucion
+                from backend.app.core.modules.ventas_pagos.models import DetalleVenta
+                dev_q = (
+                    select(
+                        func.coalesce(
+                            func.sum(
+                                DetalleDevolucion.cantidad_aceptada * (
+                                    DetalleVenta.precio_unitario - (DetalleVenta.descuento / func.nullif(DetalleVenta.cantidad, 0))
+                                )
+                            ),
+                            0,
+                        )
+                    )
+                    .join(DetalleVenta, DetalleVenta.id == DetalleDevolucion.detalle_venta_id)
+                    .join(Devolucion, Devolucion.id == DetalleDevolucion.devolucion_id)
+                    .where(
+                        Devolucion.venta_id.in_(v_ids),
+                        Devolucion.estado != "RECHAZADA",
+                        DetalleDevolucion.cantidad_aceptada > 0,
+                    )
+                )
+                total_devoluciones = Decimal(str((await self.db.execute(dev_q)).scalar() or 0)).quantize(Decimal("0.01"))
+            except Exception:
+                total_devoluciones = Decimal("0.00")
+
+            try:
+                from backend.app.core.modules.posventa.models import ObligacionReembolso
+                reemb_q = select(func.coalesce(func.sum(ObligacionReembolso.monto_bob), 0)).where(
+                    ObligacionReembolso.empresa_id == (usuario.empresa_id or v.empresa_id),
+                    ObligacionReembolso.origen_id.in_(v_ids),
+                    ObligacionReembolso.estado.in_(["AUTORIZADA", "COMPLETADA"]),
+                )
+                total_reembolsos = Decimal(str((await self.db.execute(reemb_q)).scalar() or 0)).quantize(Decimal("0.01"))
+            except Exception:
+                total_reembolsos = Decimal("0.00")
+
+        neto_comercial = max(Decimal("0.00"), subtotal_bruto - total_descuentos - total_devoluciones)
         resumen = VentasSucursalResumenDTO(
             total_ventas=total,
             unidades=unidades,
@@ -77,5 +135,10 @@ class ReporteService:
             ticket_promedio=(monto / total).quantize(Decimal("0.01")) if total else Decimal("0.00"),
             costo_total=costo if con_costos else None,
             margen_bruto_total=(monto - costo) if con_costos else None,
+            ventas_brutas=subtotal_bruto,
+            total_descuentos=total_descuentos,
+            total_devoluciones=total_devoluciones,
+            total_reembolsos=total_reembolsos,
+            neto_comercial=neto_comercial,
         )
         return VentasSucursalDTO(total=total, limit=limit, offset=offset, resumen=resumen, items=items)

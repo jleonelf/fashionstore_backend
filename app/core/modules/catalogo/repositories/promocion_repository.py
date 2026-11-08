@@ -15,16 +15,25 @@ class PromocionRepository:
         await self.db.flush()
         return promo
 
-    async def buscarPorId(self, promo_id: uuid.UUID) -> Optional[Promocion]:
-        return await self.db.get(Promocion, promo_id)
+    async def buscarPorId(self, promo_id: uuid.UUID, empresa_id: Optional[uuid.UUID] = None) -> Optional[Promocion]:
+        consulta = select(Promocion).where(Promocion.id == promo_id)
+        if empresa_id is not None:
+            consulta = consulta.where(Promocion.empresa_id == empresa_id)
+        return (await self.db.execute(consulta)).scalars().first()
 
-    async def buscarPorCodigo(self, codigo: str) -> Optional[Promocion]:
-        r = await self.db.execute(select(Promocion).where(Promocion.codigo == codigo))
+    async def buscarPorCodigo(self, codigo: str, empresa_id: Optional[uuid.UUID] = None) -> Optional[Promocion]:
+        consulta = select(Promocion).where(Promocion.codigo == codigo)
+        if empresa_id is not None:
+            consulta = consulta.where(Promocion.empresa_id == empresa_id)
+        r = await self.db.execute(consulta)
         return r.scalars().first()
 
-    async def listar(self, solo_activas: bool = False, limit: int = 50, offset: int = 0):
+    async def listar(self, solo_activas: bool = False, limit: int = 50, offset: int = 0, empresa_id: Optional[uuid.UUID] = None):
         base = select(Promocion).order_by(Promocion.creada_en.desc())
         conteo = select(func.count()).select_from(Promocion)
+        if empresa_id is not None:
+            base = base.where(Promocion.empresa_id == empresa_id)
+            conteo = conteo.where(Promocion.empresa_id == empresa_id)
         if solo_activas:
             base = base.where(Promocion.activa.is_(True))
             conteo = conteo.where(Promocion.activa.is_(True))

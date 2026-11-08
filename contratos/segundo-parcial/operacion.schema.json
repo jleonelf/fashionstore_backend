@@ -73,6 +73,9 @@
       },
       "then": {
         "properties": {
+          "version_esquema": {
+            "const": 1
+          },
           "datos": {
             "$ref": "#/$defs/reserva"
           }
@@ -499,5 +502,5 @@
       ]
     }
   },
-  "$comment": "v1 reserva/caja y compra v1/v2 mantienen semántica previa; solo compra v3 permite consentimiento específico y cobro conectado posterior. Ausencia de autorizacion_cobro produce pendiente; objeto incompleto es 422. Reglas de huella/sumas/vigencia se validan en servidor."
+  "$comment": "CU04 usa reserva v1. Las operaciones nuevas llevan fechas ISO8601 con offset Bolivia y referencia_horaria_id; el campo sigue opcional en este esquema para leer pendientes v1 antiguos. El servidor valida ámbito, tiempo y compatibilidad. Solo compra v3 permite consentimiento específico y cobro conectado posterior. Reglas de huella/sumas/vigencia se validan en servidor."
 }

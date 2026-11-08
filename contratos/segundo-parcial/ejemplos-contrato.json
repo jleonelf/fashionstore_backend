@@ -1,18 +1,38 @@
 {
   "version": "0.4.0",
+  "revision_documental": "0.3.2",
+  "referencias_horarias": [
+    {
+      "solicitud": {
+        "dispositivo_id": "00000000-0000-4000-8000-000000000004",
+        "hora_local_en": "2026-11-01T09:58:00-04:00"
+      },
+      "respuesta": {
+        "referencia_horaria_id": "00000000-0000-4000-8000-000000000012",
+        "empresa_id": "00000000-0000-4000-8000-000000000002",
+        "usuario_id": "00000000-0000-4000-8000-000000000003",
+        "dispositivo_id": "00000000-0000-4000-8000-000000000004",
+        "hora_central_en": "2026-11-01T09:58:00-04:00",
+        "valida_hasta": "2026-11-01T17:58:00-04:00",
+        "tolerancia_segundos": 300,
+        "politica_version": "cu04-1"
+      }
+    }
+  ],
   "operaciones": [
     {
       "version_esquema": 1,
       "operacion_id": "00000000-0000-4000-8000-000000000001",
       "tipo": "SOLICITAR_RESERVA",
-      "creada_local_en": "2026-10-31T10:00:00Z",
+      "creada_local_en": "2026-11-01T10:00:00-04:00",
       "empresa_id": "00000000-0000-4000-8000-000000000002",
       "usuario_id": "00000000-0000-4000-8000-000000000003",
       "dispositivo_id": "00000000-0000-4000-8000-000000000004",
       "secuencia_local": 1,
+      "referencia_horaria_id": "00000000-0000-4000-8000-000000000012",
       "datos": {
         "sucursal_id": "00000000-0000-4000-8000-000000000005",
-        "visita_en": "2026-10-31T18:00:00Z",
+        "visita_en": "2026-11-01T14:00:00-04:00",
         "lineas": [
           {
             "variante_id": "00000000-0000-4000-8000-000000000006",

@@ -1,6 +1,6 @@
-# Contrato transversal 0.3.1
+# Contrato transversal 0.3.2
 
-Leer [decisiones-0.3.1.md](decisiones-0.3.1.md), [integracion.md](integracion.md) y las fichas de [casos-de-uso.md](casos-de-uso.md).
+Leer [decisiones-0.3.1.md](decisiones-0.3.1.md), [integracion.md](integracion.md), las fichas de [casos-de-uso.md](casos-de-uso.md) y el [cierre CU03/04/16/18](cierre-cu03-cu04-cu16-cu18-0.3.2.md). La revisión documental 0.3.2 no cambia el protocolo de sincronización 0.4.0.
 
 ## Invariantes
 - Empresa se deriva de sesión y autorización; parámetros/body identifican recursos, no otorgan acceso. Verificar cada FK y ámbito de empresa, usuario y sucursal. Plataforma tiene ámbito separado.

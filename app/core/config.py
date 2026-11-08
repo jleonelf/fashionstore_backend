@@ -26,6 +26,15 @@ class Settings(BaseSettings):
     EXPIRACION_JOB_ACTIVO: bool = os.getenv("EXPIRACION_JOB_ACTIVO", "false").lower() == "true"
     EXPIRACION_JOB_MINUTOS: int = int(os.getenv("EXPIRACION_JOB_MINUTOS", "10"))
 
+    # Credenciales push. La ruta local se lee desde .env; en Render se puede
+    # proporcionar el JSON completo mediante FCM_SERVICE_ACCOUNT_JSON.
+    GOOGLE_APPLICATION_CREDENTIALS: str = ""
+    FCM_SERVICE_ACCOUNT_JSON: str = ""
+    FCM_PROJECT_ID: str = ""
+    VAPID_PRIVATE_KEY: str = ""
+    VAPID_PUBLIC_KEY: str = ""
+    VAPID_SUBJECT: str = "mailto:admin@fashionstore.local"
+
     # Ciclo 3 — Stripe Test Mode (claves solo en backend/.env, nunca en Git).
     STRIPE_ENABLED: bool = os.getenv("STRIPE_ENABLED", "false").lower() == "true"
     STRIPE_SECRET_KEY: str = os.getenv("STRIPE_SECRET_KEY", "")
@@ -51,6 +60,11 @@ class Settings(BaseSettings):
     GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
     GEMINI_MODEL: str = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
     GEMINI_TIMEOUT_SECONDS: int = int(os.getenv("GEMINI_TIMEOUT_SECONDS", "8"))
+
+    # Sincronización offline (CU04 / C34 / 0.3.2)
+    SINCRONIZACION_POLITICA_VERSION: int = int(os.getenv("SINCRONIZACION_POLITICA_VERSION", "1"))
+    SINCRONIZACION_DURACION_HORAS: int = int(os.getenv("SINCRONIZACION_DURACION_HORAS", "8"))
+    SINCRONIZACION_TOLERANCIA_SEGUNDOS: int = int(os.getenv("SINCRONIZACION_TOLERANCIA_SEGUNDOS", "300"))
 
     @property
     def sync_database_url(self) -> str:

@@ -26,7 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.core.idempotencia import hash_payload, resolver_idempotencia
 from backend.app.core.permisos import es_admin, exigir_sucursal
-from backend.app.core.reloj import RelojSistema, asegurar_utc, calcular_vencimiento, entrada_local_a_utc
+from backend.app.core.reloj import RelojSistema, asegurar_utc, calcular_vencimiento, entrada_local_a_utc, a_hora_bolivia
 from backend.app.core.modules.reservas_traslados.models import DetalleReserva, Reserva, DetalleTraslado, Traslado
 from backend.app.core.modules.inventario.models import MovimientoInventario
 from backend.app.core.modules.identidad_empresas.models import Usuario
@@ -37,8 +37,14 @@ from backend.app.core.modules.reservas_traslados.repositories.reserva_repository
     ESTADOS_NO_TERMINALES_RESERVA,
     ReservaRepository,
 )
+from backend.app.core.modules.reservas_traslados.services.reserva_transaccional import (
+    ReservaTransaccional,
+    validar_lineas_reserva,
+    validar_visita_reserva,
+)
 from backend.app.core.modules.organizacion.repositories.sucursal_repository import SucursalRepository
 from backend.app.core.modules.catalogo.repositories.variante_repository import VarianteRepository
+from backend.app.core.modules.identidad_empresas.services.plan_service import PlanService
 from backend.app.core.modules.reservas_traslados.schemas import ExpiracionResultadoDTO, ReservaCrearDTO, ReservaDTO
 
 CODIGO_ALFABETO = string.ascii_uppercase + string.digits
@@ -56,15 +62,16 @@ class ReservaService:
         self.traslado_repo = TrasladoRepository(db)
         self.sucursal_repo = SucursalRepository(db)
         self.variante_repo = VarianteRepository(db)
+        self.transaccional = ReservaTransaccional(db, self.reloj)
 
-    # ---------------- creación (CU08) ----------------
+    # ---------------- creación (CU08 / CU18) ----------------
     def _generar_codigo(self) -> str:
         return "FS-" + "".join(secrets.choice(CODIGO_ALFABETO) for _ in range(6))
 
-    async def _codigo_unico(self) -> str:
+    async def _codigo_unico(self, empresa_id: Optional[uuid.UUID] = None) -> str:
         for _ in range(5):
             codigo = self._generar_codigo()
-            if not await self.reserva_repo.existeCodigo(codigo):
+            if not await self.reserva_repo.existeCodigo(codigo, empresa_id=empresa_id):
                 return codigo
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -82,12 +89,23 @@ class ReservaService:
         """
         carga = dto.model_dump(mode="json")
         digest = hash_payload(carga)
+        if not cliente.empresa_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Usuario sin empresa asignada",
+            )
         # La sesion se comparte con get_usuario_actual (SELECT previo con
         # autobegin): no usar begin() explicito; patron commit/rollback
         # como RecepcionService.registrarLote().
         try:
             reintento = await resolver_idempotencia(self.db, Reserva, clave, digest)
             if reintento is not None:
+                if cliente.empresa_id is not None and reintento.empresa_id != cliente.empresa_id:
+                    raise HTTPException(
+                        status_code=status.HTTP_404_NOT_FOUND,
+                        detail="Reserva no encontrada",
+                    )
+                self._autorizar_lectura(cliente, reintento)
                 return await self._a_dto(reintento.id), False
             reserva = await self._crear_en_tx(cliente, dto, clave, digest)
             salida = await self._a_dto(reserva.id)
@@ -97,8 +115,8 @@ class ReservaService:
             await self.db.rollback()
             mensaje = str(getattr(e, "orig", e))
             if "clave_idempotencia" in mensaje:
-                existente = await self.reserva_repo.buscarPorClave(clave)
-                if existente is None:  # pragma: no cover (condicion de carrera extrema)
+                existente = await self.reserva_repo.buscarPorClave(clave, empresa_id=cliente.empresa_id)
+                if existente is None or (cliente.empresa_id is not None and existente.empresa_id != cliente.empresa_id):
                     raise HTTPException(
                         status_code=status.HTTP_409_CONFLICT,
                         detail="Conflicto concurrente de idempotencia",
@@ -108,6 +126,7 @@ class ReservaService:
                         status_code=status.HTTP_409_CONFLICT,
                         detail="Idempotency-Key ya usada con otra solicitud",
                     )
+                self._autorizar_lectura(cliente, existente)
                 return await self._a_dto(existente.id), False
             raise
         except HTTPException:
@@ -120,154 +139,90 @@ class ReservaService:
     async def _crear_en_tx(
         self, cliente: Usuario, dto: ReservaCrearDTO, clave: uuid.UUID, digest: str
     ) -> Reserva:
+        if not cliente.empresa_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Usuario sin empresa asignada",
+            )
         # 1. Validaciones de dominio (400/404), sin efectos aun.
-        if not dto.lineas:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="La reserva requiere al menos una linea")
-        vistos = set()
+        ahora = self.reloj.ahora()
+        plan_service = PlanService(self.db)
+        capacidad = await plan_service.validar_capacidad(
+            cliente.empresa_id, ahora, es_offline=False
+        )
+        if not capacidad.habilitado:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"PLAN_NO_HABILITADO: {capacidad.motivo_rechazo}",
+            )
+
+        validar_lineas_reserva(dto.lineas)
         for linea in dto.lineas:
-            if linea.cantidad <= 0:
-                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cantidad solicitada debe ser mayor a cero")
-            if linea.variante_id in vistos:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Variante duplicada en la reserva (una linea por variante)",
-                )
-            vistos.add(linea.variante_id)
             if linea.sucursal_origen_id is not None and linea.sucursal_origen_id == dto.sucursal_destino_id:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail="La sucursal origen del traslado debe ser distinta del destino",
                 )
-        destino = await self.sucursal_repo.buscarPorId(dto.sucursal_destino_id)
-        if destino is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Sucursal destino no encontrada")
-        if not destino.activa:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Sucursal destino inactiva")
-        variantes: Dict[uuid.UUID, object] = {}
-        for linea in dto.lineas:
-            variante = await self.variante_repo.buscarPorId(linea.variante_id)
-            if variante is None:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail=f"Variante {linea.variante_id} no encontrada",
-                )
-            if not variante.activa:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"Variante {variante.sku} inactiva",
-                )
-            variantes[linea.variante_id] = variante
-            if linea.sucursal_origen_id is not None:
-                origen = await self.sucursal_repo.buscarPorId(linea.sucursal_origen_id)
-                if origen is None:
-                    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Sucursal origen no encontrada")
-                if not origen.activa:
-                    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Sucursal origen inactiva")
+        await self.transaccional.validar_sucursal_destino(
+            dto.sucursal_destino_id, cliente.empresa_id
+        )
+        variantes = await self.transaccional.validar_variantes(dto.lineas, cliente.empresa_id)
+        await self.transaccional.validar_origenes(dto.lineas, cliente.empresa_id)
 
-        # 2. Bloqueo pesimista en orden determinista (destino + origenes).
-        claves = [(dto.sucursal_destino_id, l.variante_id) for l in dto.lineas]
-        claves += [
-            (l.sucursal_origen_id, l.variante_id)
-            for l in dto.lineas
-            if l.sucursal_origen_id is not None
-        ]
-        filas = await self.inventario_repo.bloquearFilas(claves)
+        # 2. Origen y vigencia del plazo (visita independiente del vencimiento).
+        vence_en = ahora + timedelta(hours=24)
+        fecha_visita = entrada_local_a_utc(dto.fecha_visita) if dto.fecha_visita else None
+        # Se valida antes de bloquear/apartar stock: una visita invalida no
+        # debe producir reserva ni movimiento de Kardex.
+        validar_visita_reserva(fecha_visita, ahora, vence_en)
 
-        # 3. Decision atomica por linea con stock revalidado.
-        ahora = self.reloj.ahora()
-        planes = []  # (linea_dto, modo, cantidad) modo in {"LOCAL", "TRASLADO"}
-        for linea in dto.lineas:
-            destino_row = filas.get((dto.sucursal_destino_id, linea.variante_id))
-            disponible_destino = destino_row.disponible if destino_row else 0
-            if disponible_destino >= linea.cantidad:
-                planes.append((linea, "LOCAL", linea.cantidad))
-                continue
-            if linea.sucursal_origen_id is None:
-                raise HTTPException(
-                    status_code=status.HTTP_409_CONFLICT,
-                    detail=f"Sin stock local para {variantes[linea.variante_id].sku}: indique sucursal_origen_id o reduzca la cantidad",
-                )
-            origen_row = filas.get((linea.sucursal_origen_id, linea.variante_id))
-            disponible_origen = origen_row.disponible if origen_row else 0
-            if disponible_origen < linea.cantidad:
-                raise HTTPException(
-                    status_code=status.HTTP_409_CONFLICT,
-                    detail=f"Sin stock suficiente en origen para {variantes[linea.variante_id].sku}",
-                )
-            planes.append((linea, "TRASLADO", linea.cantidad))
-        # Si alguna linea no tuvo solucion se levanto 409 y nada se persiste.
+        # 3. Bloqueo pesimista en orden determinista (destino + origenes).
+        filas = await self.transaccional.bloquear_filas(
+            dto.sucursal_destino_id, dto.lineas, incluir_origenes=True
+        )
+        planes, faltante = self.transaccional.planificar_apartado(
+            filas,
+            dto.sucursal_destino_id,
+            dto.lineas,
+            permitir_traslado=True,
+            variantes=variantes,
+        )
+        if faltante is not None:
+            detalle = faltante
+            if "local" in faltante:
+                detalle = f"{faltante}: indique sucursal_origen_id o reduzca la cantidad"
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=detalle)
 
         # 4. Cabecera + lineas + movimientos + traslados en la misma transaccion.
         con_traslado = any(modo == "TRASLADO" for _, modo, _ in planes)
         reserva = Reserva(
+            empresa_id=cliente.empresa_id,
             cliente_id=cliente.id,
             sucursal_destino_id=dto.sucursal_destino_id,
-            codigo=await self._codigo_unico(),
+            codigo=await self._codigo_unico(cliente.empresa_id),
             estado="PENDIENTE_TRASLADO" if con_traslado else "PENDIENTE",
+            revision=1,
             fecha_creacion=ahora,
-            fecha_visita=(entrada_local_a_utc(dto.fecha_visita) if dto.fecha_visita else None),
-            vence_en=(
-                entrada_local_a_utc(dto.fecha_visita) + timedelta(days=1)
-                if dto.fecha_visita
-                else calcular_vencimiento(ahora, False)
-            ),
+            origen_plazo_en=ahora,
+            vence_en=vence_en,
+            fecha_visita=fecha_visita,
             observacion=dto.observacion,
             clave_idempotencia=clave,
             hash_solicitud=digest,
+            operacion_sincronizacion_id=None,
         )
         await self.reserva_repo.crear(reserva)
-        for linea, modo, cantidad in planes:
-            detalle = DetalleReserva(
-                reserva_id=reserva.id,
-                variante_id=linea.variante_id,
-                cantidad_solicitada=linea.cantidad,
-                cantidad_reservada=cantidad if modo == "LOCAL" else 0,
-                cantidad_pendiente_traslado=cantidad if modo == "TRASLADO" else 0,
-                cantidad_vendida=0,
-                cantidad_liberada=0,
-                estado_linea="RESERVADA" if modo == "LOCAL" else "PENDIENTE_TRASLADO",
-            )
-            self.db.add(detalle)
-            await self.db.flush()
-            if modo == "LOCAL":
-                fila = filas[(dto.sucursal_destino_id, linea.variante_id)]
-                fila.disponible -= cantidad
-                fila.reservado += cantidad
-                await self.db.flush()
-                await self.movimiento_repo.registrar(
-                    MovimientoInventario(
-                        variante_id=linea.variante_id,
-                        sucursal_destino_id=dto.sucursal_destino_id,
-                        tipo="RESERVA",
-                        cantidad=cantidad,
-                        costo_unitario=Decimal(str(variantes[linea.variante_id].costo_promedio or 0)),
-                        referencia_tipo="RESERVA",
-                        referencia_id=reserva.id,
-                        linea_referencia_id=detalle.id,
-                        observacion=f"Reserva {reserva.codigo}",
-                    )
-                )
-            else:
-                traslado = Traslado(
-                    reserva_id=reserva.id,
-                    sucursal_origen_id=linea.sucursal_origen_id,
-                    sucursal_destino_id=dto.sucursal_destino_id,
-                    estado="SOLICITADO",
-                    solicitado_por_id=cliente.id,
-                )
-                await self.traslado_repo.crear(traslado)
-                self.db.add(
-                    DetalleTraslado(
-                        traslado_id=traslado.id,
-                        detalle_reserva_id=detalle.id,
-                        variante_id=linea.variante_id,
-                        cantidad=cantidad,
-                    )
-                )
-                await self.db.flush()
+        await self.transaccional.persistir_apartado(
+            reserva=reserva,
+            planes=planes,
+            variantes=variantes,
+            filas=filas,
+            permitir_traslado=True,
+            cliente_id=cliente.id,
+        )
         return reserva
 
-    # ---------------- consulta (CU08) ----------------
+    # ---------------- consulta (CU08 / CU18) ----------------
     async def _a_dto(self, reserva_id: uuid.UUID) -> ReservaDTO:
         from backend.app.core.modules.reservas_traslados.schemas import DetalleReservaDTO, TrasladoResumenDTO
 
@@ -278,21 +233,36 @@ class ReservaService:
         estado = reserva.estado
         if not isinstance(estado, str):
             estado = estado.name
+        def a_bolivia_opt(dt):
+            return a_hora_bolivia(dt) if dt else None
+
         return ReservaDTO(
             id=reserva.id,
+            empresa_id=reserva.empresa_id,
             cliente_id=reserva.cliente_id,
             sucursal_destino_id=reserva.sucursal_destino_id,
             codigo=reserva.codigo,
             estado=estado,
-            fecha_creacion=reserva.fecha_creacion,
-            fecha_visita=reserva.fecha_visita,
-            vence_en=reserva.vence_en,
+            revision=getattr(reserva, "revision", 1) or 1,
+            fecha_creacion=a_hora_bolivia(reserva.fecha_creacion),
+            fecha_visita=a_bolivia_opt(reserva.fecha_visita),
+            origen_plazo_en=a_bolivia_opt(reserva.origen_plazo_en),
+            vence_en=a_hora_bolivia(reserva.vence_en),
+            operacion_sincronizacion_id=reserva.operacion_sincronizacion_id,
             observacion=reserva.observacion,
             adelanto_modalidad=reserva.adelanto_modalidad,
-            adelanto_valor=reserva.adelanto_valor,
-            adelanto_monto=reserva.adelanto_monto,
-            preparada_en=reserva.preparada_en,
-            atendida_en=reserva.atendida_en,
+            adelanto_valor=(
+                f"{Decimal(str(reserva.adelanto_valor)):.2f}"
+                if reserva.adelanto_valor is not None
+                else None
+            ),
+            adelanto_monto=(
+                f"{Decimal(str(reserva.adelanto_monto)):.2f}"
+                if reserva.adelanto_monto is not None
+                else None
+            ),
+            preparada_en=a_bolivia_opt(reserva.preparada_en),
+            atendida_en=a_bolivia_opt(reserva.atendida_en),
             preparada_por=reserva.preparada_por,
             atendida_por=reserva.atendida_por,
             detalles=[DetalleReservaDTO.model_validate(d) for d in reserva.detalles],
@@ -307,7 +277,19 @@ class ReservaService:
             ],
         )
 
+    def _exigir_empresa(self, usuario: Usuario) -> None:
+        """Ninguna sesion opera sin empresa, ni siquiera con rol administrador."""
+        if not usuario.empresa_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Usuario sin empresa asignada",
+            )
+
     def _autorizar_lectura(self, usuario: Usuario, reserva: Reserva) -> None:
+        if not usuario.empresa_id:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Usuario sin empresa asignada")
+        if reserva.empresa_id != usuario.empresa_id:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Reserva no encontrada")
         if es_admin(usuario):
             return
         rol = (usuario.rol.nombre if usuario.rol else "").upper()
@@ -321,14 +303,16 @@ class ReservaService:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Rol no autorizado para consultar reservas")
 
     async def obtener(self, usuario: Usuario, reserva_id: uuid.UUID) -> ReservaDTO:
-        reserva = await self.reserva_repo.buscarPorId(reserva_id)
+        self._exigir_empresa(usuario)
+        reserva = await self.reserva_repo.buscarPorId(reserva_id, empresa_id=usuario.empresa_id)
         if reserva is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Reserva no encontrada")
         self._autorizar_lectura(usuario, reserva)
         return await self._a_dto(reserva.id)
 
     async def obtenerPorCodigo(self, usuario: Usuario, codigo: str) -> ReservaDTO:
-        reserva = await self.reserva_repo.buscarPorCodigo(codigo)
+        self._exigir_empresa(usuario)
+        reserva = await self.reserva_repo.buscarPorCodigo(codigo, empresa_id=usuario.empresa_id)
         if reserva is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Reserva no encontrada")
         self._autorizar_lectura(usuario, reserva)
@@ -344,6 +328,8 @@ class ReservaService:
         limit: int = 50,
         offset: int = 0,
     ):
+        if not usuario.empresa_id:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Usuario sin empresa asignada")
         rol = (usuario.rol.nombre if usuario.rol else "").upper()
         if rol == "CLIENTE":
             if cliente_id is not None and cliente_id != usuario.id:
@@ -366,7 +352,7 @@ class ReservaService:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Rol no autorizado")
         items, total = await self.reserva_repo.listar(
             cliente_id=cliente_id, sucursal_id=sucursal_id, estado=estado,
-            codigo=codigo, limit=limit, offset=offset,
+            codigo=codigo, limit=limit, offset=offset, empresa_id=usuario.empresa_id,
         )
         return {
             "total": total, "limit": limit, "offset": offset,
@@ -375,6 +361,10 @@ class ReservaService:
 
     # ---------------- cancelación / expiración ----------------
     def _puede_cancelar(self, usuario: Usuario, reserva: Reserva) -> None:
+        if not usuario.empresa_id:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Usuario sin empresa asignada")
+        if reserva.empresa_id != usuario.empresa_id:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Reserva no encontrada")
         if reserva.estado not in ESTADOS_CANCELABLES:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
@@ -391,15 +381,30 @@ class ReservaService:
             return
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Rol no autorizado para cancelar reservas")
 
-    async def cancelar(self, usuario: Usuario, reserva_id: uuid.UUID) -> ReservaDTO:
+    async def cancelar(
+        self,
+        usuario: Usuario,
+        reserva_id: uuid.UUID,
+        revision: Optional[int] = None,
+        clave_idempotencia: Optional[str] = None,
+    ) -> ReservaDTO:
+        self._exigir_empresa(usuario)
         try:
-            actual = await self.reserva_repo.buscarPorId(reserva_id)
+            actual = await self.reserva_repo.buscarPorId(reserva_id, empresa_id=usuario.empresa_id)
             if actual is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Reserva no encontrada")
             if actual.estado in ("CANCELADA", "VENCIDA", "COMPLETADA"):
+                self._autorizar_lectura(usuario, actual)
                 return await self._a_dto(actual.id)  # repeticion idempotente
             self._puede_cancelar(usuario, actual)  # 403/409 tras revalidar estado
+            if revision is not None and actual.revision != revision:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=f"Conflicto de revision: esperada {actual.revision}, recibida {revision}",
+                )
             await self._liberar_reserva(actual, "CANCELADA", None)
+            actual.revision = (actual.revision or 1) + 1
+            await self.db.flush()
             salida = await self._a_dto(actual.id)
             await self.db.commit()
             return salida
@@ -493,6 +498,10 @@ class ReservaService:
 
     # ---------------- preparación y atención CU10 (Entrega 4) ----------------
     def _autorizar_sucursal_staff(self, usuario: Usuario, reserva: Reserva) -> None:
+        if not usuario.empresa_id:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Usuario sin empresa asignada")
+        if reserva.empresa_id != usuario.empresa_id:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Reserva no encontrada")
         rol = (usuario.rol.nombre if usuario.rol else "").upper()
         if rol == "ENCARGADO":
             exigir_sucursal(usuario, reserva.sucursal_destino_id)
@@ -503,8 +512,9 @@ class ReservaService:
 
     async def preparar(self, usuario: Usuario, reserva_id: uuid.UUID) -> ReservaDTO:
         """PENDIENTE -> PREPARADA. Sin traslados pendientes ni vencimiento."""
+        self._exigir_empresa(usuario)
         try:
-            reserva = await self.reserva_repo.buscarPorId(reserva_id)
+            reserva = await self.reserva_repo.buscarPorId(reserva_id, empresa_id=usuario.empresa_id)
             if reserva is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Reserva no encontrada")
             self._autorizar_sucursal_staff(usuario, reserva)
@@ -538,8 +548,9 @@ class ReservaService:
 
     async def atender(self, usuario: Usuario, reserva_id: uuid.UUID) -> ReservaDTO:
         """PREPARADA -> ATENDIDA (cliente en vestidor)."""
+        self._exigir_empresa(usuario)
         try:
-            reserva = await self.reserva_repo.buscarPorId(reserva_id)
+            reserva = await self.reserva_repo.buscarPorId(reserva_id, empresa_id=usuario.empresa_id)
             if reserva is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Reserva no encontrada")
             self._autorizar_sucursal_staff(usuario, reserva)
@@ -575,13 +586,16 @@ class ReservaService:
         offset: int = 0,
     ):
         """Cola paginada de la sucursal para polling (sin websocket/push)."""
+        if not usuario.empresa_id:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Usuario sin empresa asignada")
         rol = (usuario.rol.nombre if usuario.rol else "").upper()
         if rol == "ENCARGADO":
             exigir_sucursal(usuario, sucursal_id)
         elif not es_admin(usuario):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Solo Encargado o Administrador")
         items, total = await self.reserva_repo.listar(
-            sucursal_id=sucursal_id, estado=estado, limit=limit, offset=offset
+            sucursal_id=sucursal_id, estado=estado, limit=limit, offset=offset,
+            empresa_id=usuario.empresa_id,
         )
         return {
             "total": total, "limit": limit, "offset": offset,
@@ -589,7 +603,9 @@ class ReservaService:
         }
 
     # ---------------- expiración CU24 ----------------
-    async def expirarVencidas(self, ahora: Optional[datetime] = None, limite: int = 100) -> ExpiracionResultadoDTO:
+    async def expirarVencidas(
+        self, ahora: Optional[datetime] = None, limite: int = 100, empresa_id: Optional[uuid.UUID] = None
+    ) -> ExpiracionResultadoDTO:
         """Job de vencimiento: idempotente, con advisory lock y SKIP LOCKED.
 
         Retorna procesadas/expiradas/omitidas/errores. Si otra instancia tiene
@@ -608,14 +624,14 @@ class ReservaService:
                 await self.db.rollback()
                 return resultado
             try:
-                candidatas = await self.reserva_repo.buscarVencidas(momento, limite)
+                candidatas = await self.reserva_repo.buscarVencidas(momento, limite, empresa_id=empresa_id)
                 for reserva in candidatas:
                     if reserva.estado not in ESTADOS_NO_TERMINALES_RESERVA:
                         resultado.omitidas.append(str(reserva.id))
                         continue
                     try:
                         async with self.db.begin_nested():
-                            actual = await self.reserva_repo.buscarPorId(reserva.id)
+                            actual = await self.reserva_repo.buscarPorId(reserva.id, empresa_id=reserva.empresa_id)
                             if actual.estado not in ESTADOS_NO_TERMINALES_RESERVA:
                                 resultado.omitidas.append(str(reserva.id))
                                 continue

@@ -92,8 +92,16 @@ class MovimientoRepository:
         hasta: Optional[datetime] = None,
         limit: int = 100,
         offset: int = 0,
+        empresa_id: Optional[uuid.UUID] = None,
+        orden_asc: bool = False,
     ) -> List[MovimientoInventario]:
-        query = select(MovimientoInventario).order_by(MovimientoInventario.fecha_hora.desc())
+        orden = MovimientoInventario.fecha_hora.asc() if orden_asc else MovimientoInventario.fecha_hora.desc()
+        query = select(MovimientoInventario).order_by(orden)
+        if empresa_id:
+            from backend.app.core.modules.catalogo.models import VarianteProducto
+            query = query.join(VarianteProducto, VarianteProducto.id == MovimientoInventario.variante_id).where(
+                VarianteProducto.empresa_id == empresa_id
+            )
         if variante_id:
             query = query.where(MovimientoInventario.variante_id == variante_id)
         if sucursal_id:
@@ -107,7 +115,8 @@ class MovimientoRepository:
             query = query.where(MovimientoInventario.fecha_hora >= desde)
         if hasta:
             query = query.where(MovimientoInventario.fecha_hora <= hasta)
-        query = query.limit(limit).offset(offset)
+        if limit is not None:
+            query = query.limit(limit).offset(offset)
         result = await self.db.execute(query)
         return list(result.scalars().all())
 

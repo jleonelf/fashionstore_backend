@@ -23,35 +23,52 @@ class ReservaRepository:
         await self.db.flush()
         return reserva
 
-    async def buscarPorId(self, reserva_id: uuid.UUID) -> Optional[Reserva]:
+    async def buscarPorId(
+        self, reserva_id: uuid.UUID, empresa_id: Optional[uuid.UUID] = None
+    ) -> Optional[Reserva]:
         query = (
             select(Reserva)
             .options(selectinload(Reserva.detalles))
             .where(Reserva.id == reserva_id)
         )
+        if empresa_id is not None:
+            query = query.where(Reserva.empresa_id == empresa_id)
         result = await self.db.execute(query)
         return result.scalars().first()
 
-    async def buscarPorCodigo(self, codigo: str) -> Optional[Reserva]:
+    async def buscarPorCodigo(
+        self, codigo: str, empresa_id: Optional[uuid.UUID] = None
+    ) -> Optional[Reserva]:
         query = (
             select(Reserva)
             .options(selectinload(Reserva.detalles))
             .where(Reserva.codigo == codigo)
         )
+        if empresa_id is not None:
+            query = query.where(Reserva.empresa_id == empresa_id)
         result = await self.db.execute(query)
         return result.scalars().first()
 
-    async def buscarPorClave(self, clave: uuid.UUID) -> Optional[Reserva]:
+    async def buscarPorClave(
+        self, clave: uuid.UUID, empresa_id: Optional[uuid.UUID] = None
+    ) -> Optional[Reserva]:
         query = (
             select(Reserva)
             .options(selectinload(Reserva.detalles))
             .where(Reserva.clave_idempotencia == clave)
         )
+        if empresa_id is not None:
+            query = query.where(Reserva.empresa_id == empresa_id)
         result = await self.db.execute(query)
         return result.scalars().first()
 
-    async def existeCodigo(self, codigo: str) -> bool:
-        result = await self.db.execute(select(Reserva.id).where(Reserva.codigo == codigo))
+    async def existeCodigo(
+        self, codigo: str, empresa_id: Optional[uuid.UUID] = None
+    ) -> bool:
+        query = select(Reserva.id).where(Reserva.codigo == codigo)
+        if empresa_id is not None:
+            query = query.where(Reserva.empresa_id == empresa_id)
+        result = await self.db.execute(query)
         return result.scalars().first() is not None
 
     async def trasladosDeReserva(self, reserva_id: uuid.UUID) -> List[Traslado]:
@@ -68,9 +85,13 @@ class ReservaRepository:
         codigo: Optional[str] = None,
         limit: int = 50,
         offset: int = 0,
+        empresa_id: Optional[uuid.UUID] = None,
     ) -> Tuple[List[Reserva], int]:
         base = select(Reserva)
         conteo = select(func.count()).select_from(Reserva)
+        if empresa_id is not None:
+            base = base.where(Reserva.empresa_id == empresa_id)
+            conteo = conteo.where(Reserva.empresa_id == empresa_id)
         if cliente_id is not None:
             base = base.where(Reserva.cliente_id == cliente_id)
             conteo = conteo.where(Reserva.cliente_id == cliente_id)
@@ -94,7 +115,7 @@ class ReservaRepository:
         return items, total
 
     async def buscarVencidas(
-        self, ahora: datetime, limite: int = 100
+        self, ahora: datetime, limite: int = 100, empresa_id: Optional[uuid.UUID] = None
     ) -> List[Reserva]:
         query = (
             select(Reserva)
@@ -103,10 +124,10 @@ class ReservaRepository:
                 Reserva.vence_en <= ahora,
                 Reserva.estado.in_(ESTADOS_NO_TERMINALES_RESERVA),
             )
-            .order_by(Reserva.vence_en, Reserva.id)
-            .limit(limite)
-            .with_for_update(skip_locked=True)
         )
+        if empresa_id is not None:
+            query = query.where(Reserva.empresa_id == empresa_id)
+        query = query.order_by(Reserva.vence_en, Reserva.id).limit(limite).with_for_update(skip_locked=True)
         result = await self.db.execute(query)
         return list(result.scalars().all())
 

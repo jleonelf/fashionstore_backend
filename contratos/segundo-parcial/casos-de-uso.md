@@ -1,6 +1,6 @@
-# Casos de uso — catálogo completo 0.3.1
+# Casos de uso — catálogo completo 0.3.2
 
-27 contratos funcionales de implementación. No acreditan ejecución. CU01–CU26 conservan sus números; CU27 se añade por reembolsos. A-PAGO-01 confirmado por el compañero, compra v3 y políticas del equipo están en [decisiones-0.3.1.md](decisiones-0.3.1.md); la confirmación académica posterior queda anotada allí.
+27 contratos funcionales de implementación. No acreditan ejecución. Esta revisión cierra la adaptación de [CU03, CU04, CU16 y CU18](cierre-cu03-cu04-cu16-cu18-0.3.2.md); las otras 23 fichas mantienen su contenido 0.3.1. CU01–CU26 conservan sus números; CU27 se añade por reembolsos. A-PAGO-01 confirmado por el compañero, compra v3 y políticas del equipo están en [decisiones-0.3.1.md](decisiones-0.3.1.md); la confirmación académica posterior queda anotada allí.
 
 | Código | Nombre | Paquete | Canales |
 |---|---|---|---|

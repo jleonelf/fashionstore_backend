@@ -49,24 +49,74 @@ class InventarioService:
         hasta: Optional[datetime] = None,
         limit: int = 100,
         offset: int = 0,
+        empresa_id: Optional[uuid.UUID] = None,
     ) -> List[Dict[str, Any]]:
+        from collections import defaultdict
         if variante_id is not None:
             variante = await self.variante_repo.buscarPorId(variante_id)
             if not variante:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Variante no encontrada")
-        desde = entrada_local_a_utc(desde) if desde is not None else None
-        hasta = entrada_local_a_utc(hasta) if hasta is not None else None
-        movimientos = await self.movimiento_repo.listar(
+            if empresa_id is not None and getattr(variante, "empresa_id", None) != empresa_id:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Variante no pertenece a la empresa")
+        desde_utc = entrada_local_a_utc(desde) if desde is not None else None
+        hasta_utc = entrada_local_a_utc(hasta) if hasta is not None else None
+
+        # Obtenemos historial cronológico completo ascendente para calcular saldo_fisico continuo
+        todos_cronologicos = await self.movimiento_repo.listar(
             variante_id=variante_id,
             sucursal_id=sucursal_id,
-            tipo=tipo,
-            desde=desde,
-            hasta=hasta,
-            limit=limit,
-            offset=offset,
+            tipo=None,
+            desde=None,
+            hasta=None,
+            limit=None,
+            offset=0,
+            empresa_id=empresa_id,
+            orden_asc=True,
         )
+
+        saldos_map = defaultdict(int)
+        for m in todos_cronologicos:
+            delta = 0
+            # Los movimientos de caja trazan disponibilidad/cupo, no alteración física.
+            if m.tipo in ("COMPROMISO_CAJA", "LIBERACION_CUPO_CAJA"):
+                delta = 0
+            elif sucursal_id is not None:
+                if m.sucursal_destino_id == sucursal_id:
+                    delta = m.cantidad
+                elif m.sucursal_origen_id == sucursal_id:
+                    delta = -m.cantidad
+            else:
+                if m.tipo in ("RECEPCION_PROVEEDOR", "DEVOLUCION_CLIENTE", "AJUSTE_POSITIVO", "ENTRADA", "PRODUCCION"):
+                    delta = m.cantidad
+                elif m.tipo in ("VENTA_PRESENCIAL", "VENTA_ONLINE", "VENTA_CAJA_OFFLINE", "VENTA", "MERMA", "AJUSTE_NEGATIVO", "SALIDA"):
+                    delta = -m.cantidad
+                elif m.sucursal_destino_id and not m.sucursal_origen_id:
+                    delta = m.cantidad
+                elif m.sucursal_origen_id and not m.sucursal_destino_id:
+                    delta = -m.cantidad
+            clave = (m.variante_id, sucursal_id) if sucursal_id else m.variante_id
+            saldos_map[clave] += delta
+            m._saldo_fisico = saldos_map[clave]
+
+        # Filtrar por tipo, desde, hasta
+        filtrados = todos_cronologicos
+        if tipo:
+            filtrados = [m for m in filtrados if m.tipo == tipo]
+        if desde_utc:
+            filtrados = [m for m in filtrados if m.fecha_hora >= desde_utc]
+        if hasta_utc:
+            filtrados = [m for m in filtrados if m.fecha_hora <= hasta_utc]
+
+        # Invertir para retornar fecha_hora descendente
+        filtrados.reverse()
+
+        # Paginación
+        paginados = filtrados[offset : offset + limit] if limit else filtrados[offset:]
+
         out = []
-        for m in movimientos:
+        for m in paginados:
+            costo_u = float(m.costo_unitario) if m.costo_unitario is not None else 0.0
+            saldo_f = getattr(m, "_saldo_fisico", m.cantidad)
             out.append({
                 "id": str(m.id),
                 "variante_id": str(m.variante_id),
@@ -75,9 +125,12 @@ class InventarioService:
                 "responsable_id": str(m.responsable_id) if m.responsable_id else None,
                 "tipo": m.tipo,
                 "cantidad": m.cantidad,
-                "costo_unitario": float(m.costo_unitario) if m.costo_unitario is not None else 0.0,
+                "costo_unitario": costo_u,
+                "saldo_fisico": saldo_f,
+                "valoracion_saldo": round(saldo_f * costo_u, 2),
                 "referencia_tipo": m.referencia_tipo,
                 "referencia_id": str(m.referencia_id) if m.referencia_id else None,
+                "linea_referencia_id": str(m.linea_referencia_id) if m.linea_referencia_id else None,
                 "fecha_hora": a_hora_bolivia(m.fecha_hora).isoformat() if m.fecha_hora else None,
                 "observacion": m.observacion,
             })
@@ -112,10 +165,12 @@ class InventarioService:
             "observacion": mov.observacion,
         }
 
-    # ---------- CU07 - Existencias ----------
+    # ---------- CU07 / CU17 - Existencias ----------
 
-    async def existenciasPorSucursal(self, sucursal_id: uuid.UUID) -> List[Dict[str, Any]]:
-        return await self.inventario_repo.existenciasEnriquecidas(sucursal_id=sucursal_id)
+    async def existenciasPorSucursal(
+        self, sucursal_id: uuid.UUID, empresa_id: Optional[uuid.UUID] = None
+    ) -> List[Dict[str, Any]]:
+        return await self.inventario_repo.existenciasEnriquecidas(sucursal_id=sucursal_id, empresa_id=empresa_id)
 
     async def existenciasPorVariante(self, variante_id: uuid.UUID) -> List[Dict[str, Any]]:
         variante = await self.variante_repo.buscarPorId(variante_id)
@@ -123,16 +178,20 @@ class InventarioService:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Variante no encontrada")
         return await self.inventario_repo.porVarianteEnriquecido(variante_id)
 
-    async def consultarExistencias(self, sucursal_id: Optional[uuid.UUID] = None) -> List[Dict[str, Any]]:
+    async def consultarExistencias(
+        self, sucursal_id: Optional[uuid.UUID] = None, empresa_id: Optional[uuid.UUID] = None
+    ) -> List[Dict[str, Any]]:
         if sucursal_id:
-            return await self.existenciasPorSucursal(sucursal_id)
-        return await self.inventario_repo.existenciasEnriquecidas(sucursal_id=None)
+            return await self.existenciasPorSucursal(sucursal_id, empresa_id=empresa_id)
+        return await self.inventario_repo.existenciasEnriquecidas(sucursal_id=None, empresa_id=empresa_id)
 
-    # ---------- CU07 - Valorización ----------
+    # ---------- CU07 / CU17 - Valorización ----------
 
-    async def valorizacion(self, sucursal_id: Optional[uuid.UUID] = None) -> Dict[str, Any]:
+    async def valorizacion(
+        self, sucursal_id: Optional[uuid.UUID] = None, empresa_id: Optional[uuid.UUID] = None
+    ) -> Dict[str, Any]:
         if sucursal_id:
-            por_sucursal = await self.inventario_repo.valorizacionPorSucursal(sucursal_id=sucursal_id)
+            por_sucursal = await self.inventario_repo.valorizacionPorSucursal(sucursal_id=sucursal_id, empresa_id=empresa_id)
             total_val = sum(s["valorizacion"] for s in por_sucursal)
             total_unidades = sum(s["total_unidades"] for s in por_sucursal)
             return {
@@ -144,7 +203,9 @@ class InventarioService:
                 },
                 "filtro_sucursal_id": str(sucursal_id),
             }
-        return await self.inventario_repo.valorizacionGlobal()
+        return await self.inventario_repo.valorizacionGlobal(empresa_id=empresa_id)
 
-    async def consultarValorizacion(self, sucursal_id: Optional[uuid.UUID] = None) -> Dict[str, Any]:
-        return await self.valorizacion(sucursal_id)
+    async def consultarValorizacion(
+        self, sucursal_id: Optional[uuid.UUID] = None, empresa_id: Optional[uuid.UUID] = None
+    ) -> Dict[str, Any]:
+        return await self.valorizacion(sucursal_id, empresa_id=empresa_id)

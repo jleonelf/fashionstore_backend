@@ -1,5 +1,6 @@
 {
   "version": "0.4.0",
+  "revision_documental": "0.3.2",
   "base": "/api/v1",
   "tipo": "especificacion documental; no OpenAPI ejecutable",
   "casos": [
@@ -47,8 +48,8 @@
       ],
       "estado_rutas": "propuestas/adaptaciones; cotejar checkout actual y conservar adaptadores",
       "autorizacion": "Visitante o cliente; personal autorizado para ámbito operativo",
-      "entrada": "empresa_codigo, sucursales autorizadas/públicas según ámbito, version_conocida opcional.",
-      "salida": "empresa_id, version, generado_en, sucursales, productos, variantes, colores y componentes, promociones; sin información privada.",
+      "entrada": "GET: empresa_codigo obligatorio, sucursal_id? del ámbito, version_conocida? solo como pista; respuesta completa HTTP 200.",
+      "salida": "empresa_id, empresa_codigo, catalogo_version, generado_en, ambito_sucursales, productos con variantes/disponibilidad conocida, colores/componentes y promociones; sin datos privados.",
       "errores": [
         "Interrupción: conservar última copia válida. Espacio insuficiente: informar sin declarar éxito.",
         "Cambio de empresa no mezcla instantáneas; copia inválida no se usa como actual."
@@ -66,8 +67,8 @@
       ],
       "estado_rutas": "propuestas/adaptaciones; cotejar checkout actual y conservar adaptadores",
       "autorizacion": "Cliente",
-      "entrada": "Operación SOLICITAR_RESERVA v1: UUID, empresa/actor/dispositivo, secuencia, creada_local_en, datos{sucursal_id,visita_en,lineas[{variante_id,cantidad}]}.",
-      "salida": "Resultado durable con operacion_id, estado, codigo, revision y recurso_id/vence_en al aceptar.",
+      "entrada": "Referencia POST: dispositivo_id, hora_local_en con offset Bolivia, Idempotency-Key. Operación SOLICITAR_RESERVA v1: UUID, empresa/actor/dispositivo, secuencia, referencia_horaria_id en nuevos comandos, creada_local_en con zona, datos{sucursal_id,visita_en,lineas[{variante_id,cantidad}]}.",
+      "salida": "Referencia vinculada con hora_central_en, valida_hasta, tolerancia_segundos y politica_version. Resultado durable con operacion_id, estado, codigo, recibida_en, revision y recurso_id/aceptada_en/vence_en al aceptar; presentación America/La_Paz.",
       "errores": [
         "Sin stock o vencida: rechazo durable sin apartado. Reloj incoherente: CONFLICTO/TIEMPO_INCOHERENTE.",
         "Timeout tras aceptación: consultar/repetir mismo UUID; no recrear solicitud ni reiniciar plazo."
@@ -296,12 +297,12 @@
       "rutas": [
         "GET /catalogo/productos",
         "GET /catalogo/filtros-opciones",
-        "GET /variantes/{variante_id}/disponibilidad"
+        "GET /catalogo/variantes/{variante_id}/disponibilidad"
       ],
       "estado_rutas": "propuestas/adaptaciones; cotejar checkout actual y conservar adaptadores",
       "autorizacion": "Visitante, cliente o personal autorizado",
-      "entrada": "texto, categoría, talla, color_id, componentes_color, modo_color=EXACTO/TODOS_COMPONENTES, sucursal, precio_min/max, pagina.",
-      "salida": "items paginados, variantes y disponibilidad conocida, precios/promociones, colores compuestos; total/paginación según fuente.",
+      "entrada": "empresa_codigo, texto?, categoria_id?, talla_id?, color_id?, componentes_color[]?, modo_color=EXACTO|TODOS_COMPONENTES, sucursal_id?, precio_min_bob?, precio_max_bob?, limit, offset.",
+      "salida": "{total,limit,offset,items[]} con variantes, precio BOB decimal, promoción condicional y disponibilidad conocida/fuente; alias GET /productos conserva lista heredada.",
       "errores": [
         "Sin copia local informar indisponibilidad, no lista vacía presentada como catálogo actualizado.",
         "No exponer costos, empleados o stock comprometido privado en descarga pública."
@@ -338,8 +339,8 @@
       ],
       "estado_rutas": "propuestas/adaptaciones; cotejar checkout actual y conservar adaptadores",
       "autorizacion": "Cliente; personal consulta/prepara según funciones existentes",
-      "entrada": "Crear: sucursal, visita, líneas. Consultar/cancelar: reserva_id, revision; Idempotency-Key en mutaciones.",
-      "salida": "reserva_id, código, estado, origen_plazo_en, visita_en, vence_en, adelantos y líneas.",
+      "entrada": "Crear: sucursal_destino_id, fecha_visita, lineas[{variante_id,cantidad,sucursal_origen_id?}], Idempotency-Key. Consultar: reserva_id o lista. Cancelar: revision e Idempotency-Key; adaptador heredado sin revision bajo bloqueo.",
+      "salida": "id, código, estado, revision, origen_plazo_en, fecha_visita, vence_en, adelanto confirmado y estados por línea; lista {total,limit,offset,items[]}.",
       "errores": [
         "Stock insuficiente no crea aceptación parcial implícita.",
         "Adelanto tardío no reactiva reserva vencida; pago incierto exige conciliación antes de expirar compromisos asociados."

@@ -1,6 +1,7 @@
 {
   "nombre": "fashionstore-segundo-parcial",
   "version": "0.4.0",
+  "revision_documental": "0.3.2",
   "estado": "especificacion-v3-con-A-PAGO-01-confirmado-por-companero",
   "base": "/api/v1",
   "formato": {
@@ -10,6 +11,15 @@
     "moneda_stripe_test": "USD",
     "identificador": "UUID",
     "autorizacion": "sesion autenticada; empresa y propietario validados en servidor"
+  },
+  "cu04_referencia_horaria": {
+    "ruta": "POST /sincronizacion/referencias-horarias",
+    "solicitud": ["dispositivo_id", "hora_local_en"],
+    "header": "Idempotency-Key",
+    "respuesta": ["referencia_horaria_id", "empresa_id", "usuario_id", "dispositivo_id", "hora_central_en", "valida_hasta", "tolerancia_segundos", "politica_version"],
+    "zona_presentacion": "America/La_Paz",
+    "referencia_id_obligatoria_en_operacion_nueva": true,
+    "version_esquema_reserva": 1
   },
   "operacion": {
     "obligatorios": [
