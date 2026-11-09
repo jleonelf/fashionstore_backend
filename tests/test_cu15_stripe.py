@@ -1,6 +1,7 @@
 """CU15 — Stripe Test Mode: intenciones, webhook firmado, reintento y expiración."""
 import json
 import uuid
+from decimal import Decimal
 
 import pytest
 from httpx import AsyncClient
@@ -62,10 +63,19 @@ async def test_pago_aprobado_consume_stock_y_kardex_unico(cliente_http: AsyncCli
         var = await crear_variante_con_stock(cliente_http, suc, 5, tag="s15a",
                                              precio="100.00", costo="40.00")
         out = await _checkout(cli, suc, var, 2)
+        intencion_key = clave()
         inten = (await cli.client.post(
             "/api/v1/pagos/stripe/intenciones", json={"venta_id": out["venta_id"]},
-            headers={"Idempotency-Key": clave()})).json()
+            headers={"Idempotency-Key": intencion_key})).json()
         assert inten["payment_intent_id"].startswith("pi_test_"), inten
+        assert inten["moneda"] == "usd"
+        assert Decimal(str(inten["monto"])) == Decimal("28.74")
+        assert stripe_fake.gw.intenciones[inten["payment_intent_id"]].monto_centavos == 2874
+        misma = (await cli.client.post(
+            "/api/v1/pagos/stripe/intenciones", json={"venta_id": out["venta_id"]},
+            headers={"Idempotency-Key": intencion_key})).json()
+        assert misma["payment_intent_id"] == inten["payment_intent_id"]
+        assert misma["client_secret"] == inten["client_secret"]
         # Reintento de intención reutiliza el mismo PaymentIntent.
         inten2 = (await cli.client.post(
             "/api/v1/pagos/stripe/intenciones", json={"venta_id": out["venta_id"]},
@@ -88,6 +98,48 @@ async def test_pago_aprobado_consume_stock_y_kardex_unico(cliente_http: AsyncCli
                                   headers={"Stripe-Signature": firma})
         assert r.status_code == 200
         assert await contar_kardex(out["venta_id"], "VENTA_DIGITAL") == 1
+
+
+async def test_consulta_concilia_pago_capturado_con_importe_usd(cliente_http: AsyncClient, stripe_fake):
+    async with await crear_cliente("s15consulta") as cli:
+        suc = await sucursal_semilla(cliente_http)
+        var = await crear_variante_con_stock(cliente_http, suc, 2, tag="s15consulta",
+                                             precio="100.00", costo="40.00")
+        out = await _checkout(cli, suc, var)
+        respuesta = await cli.client.post(
+            "/api/v1/pagos/stripe/intenciones", json={"venta_id": out["venta_id"]},
+            headers={"Idempotency-Key": clave()})
+        assert respuesta.status_code == 201, respuesta.text
+        pi_id = respuesta.json()["payment_intent_id"]
+        stripe_fake.gw.intenciones[pi_id].estado = "SUCCEEDED"
+        estado = await cli.client.get(f"/api/v1/pagos/stripe/estado/{out['venta_id']}")
+        assert estado.status_code == 200, estado.text
+        assert estado.json()["estado_venta"] == "PAGADA"
+        assert estado.json()["estado_pago"] == "APROBADO"
+        assert await contar_kardex(out["venta_id"], "VENTA_DIGITAL") == 1
+
+
+async def test_captura_con_importe_usd_incorrecto_no_confirma_venta(cliente_http: AsyncClient, stripe_fake):
+    async with await crear_cliente("s15importe") as cli:
+        suc = await sucursal_semilla(cliente_http)
+        var = await crear_variante_con_stock(cliente_http, suc, 2, tag="s15importe",
+                                             precio="100.00", costo="40.00")
+        out = await _checkout(cli, suc, var)
+        respuesta = await cli.client.post(
+            "/api/v1/pagos/stripe/intenciones", json={"venta_id": out["venta_id"]},
+            headers={"Idempotency-Key": clave()})
+        assert respuesta.status_code == 201, respuesta.text
+        pi_id = respuesta.json()["payment_intent_id"]
+        stripe_fake.gw.intenciones[pi_id].monto_centavos = 10000
+        stripe_fake.gw.intenciones[pi_id].estado = "SUCCEEDED"
+        estado = await cli.client.get(f"/api/v1/pagos/stripe/estado/{out['venta_id']}")
+        assert estado.status_code == 409
+        cuerpo, _ = _webhook(pi_id, "payment_intent.succeeded")
+        webhook = await cli.client.post(
+            "/api/v1/pagos/stripe/webhook", content=cuerpo,
+            headers={"Stripe-Signature": gw.firmar_prueba(cuerpo, "whsec_prueba")})
+        assert webhook.status_code == 409
+        assert await contar_kardex(out["venta_id"], "VENTA_DIGITAL") == 0
 
 
 async def test_pago_rechazado_mantiene_ventana_sin_consumo(cliente_http: AsyncClient, stripe_fake):
