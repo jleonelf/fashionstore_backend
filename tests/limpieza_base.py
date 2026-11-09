@@ -39,10 +39,10 @@ def _nombre_base_efectiva() -> str:
 def exigir_base_de_pruebas() -> str:
     """Retorna el nombre efectivo o rechaza explícitamente otra base."""
     nombre = _nombre_base_efectiva()
-    if not (nombre or "").strip().endswith("_test"):
+    if not (nombre or "").strip().endswith("_test") or nombre == "fashionstore_manual_test":
         raise RuntimeError(
             "Limpieza rechazada: la base efectiva "
-            f"'{nombre}' no termina en '_test'. Esta operación solo puede "
+            f"'{nombre}' no es una base de pruebas desechable. Esta operación solo puede "
             "ejecutarse sobre fashionstore_test (o base temporal *_test). "
             "Nunca sobre fashionstore_db, Neon ni producción."
         )

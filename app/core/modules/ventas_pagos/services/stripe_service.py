@@ -26,6 +26,7 @@ from backend.app.core.reloj import RelojSistema
 from backend.app.core.modules.ventas_pagos.models import DetalleVenta, Pago, Venta
 from backend.app.core.modules.inventario.models import MovimientoInventario
 from backend.app.core.modules.identidad_empresas.models import Usuario
+from backend.app.core.modules.organizacion.services.tasa_cambio_service import TasaCambioService
 from backend.app.core.modules.ventas_pagos.models_ordenes import (
     ContinuarAccionDTO,
     EventoProveedor,
@@ -108,24 +109,42 @@ class StripeService:
                             "mensaje": "Idempotency-Key ya usada con otra solicitud",
                         },
                     )
-                return self._a_intencion(venta, existente), False
+                if existente.venta_id != venta.id:
+                    raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Idempotency-Key pertenece a otra venta")
+            cotizacion = await TasaCambioService(self.db).cotizar(Decimal(str(venta.total)))
+            if cotizacion.centavos_usd <= 0:
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="El importe convertido no permite crear un pago Stripe")
             pago_previo = await self._pago_stripe_de_venta(venta.id)
             gateway = gw.obtener_gateway()
             referencia: Optional[str] = pago_previo.referencia_externa if pago_previo else None
+            monto_usd = cotizacion.monto_usd
             if referencia:
-                try:
-                    pi_vigente = await gateway.consultar_intencion(referencia)
-                    if pi_vigente.estado == "CANCELED":
+                pi_vigente = await gateway.consultar_intencion(referencia)
+                if pi_vigente.estado == "CANCELED":
+                    referencia = None
+                else:
+                    try:
+                        monto_usd = await self._validar_intencion_venta(venta, pi_vigente)
+                    except HTTPException:
+                        if pi_vigente.estado == "SUCCEEDED":
+                            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="El pago capturado requiere conciliación del importe")
+                        await gateway.cancelar_intencion(referencia)
                         referencia = None
-                except HTTPException:
-                    pass
             inten = await gateway.crear_o_reutilizar_intencion(
                 venta_id=str(venta.id),
-                monto_centavos=_centavos(venta.total),
-                moneda=settings.STRIPE_CURRENCY or "usd",
-                idempotency_key=str(clave),
+                monto_centavos=cotizacion.centavos_usd,
+                moneda="usd",
+                idempotency_key=f"{clave}-bob-usd-{cotizacion.tasa_id}",
                 referencia_existente=referencia,
+                empresa_id=str(venta.empresa_id),
+                metadata={
+                    "tasa_id": str(cotizacion.tasa_id),
+                    "monto_bob": str(Decimal(str(venta.total)).quantize(Decimal("0.01"))),
+                    "centavos_usd": str(cotizacion.centavos_usd),
+                },
             )
+            if referencia is None:
+                monto_usd = cotizacion.monto_usd
             if pago_previo is not None:
                 pago = pago_previo
                 if pago.referencia_externa != inten.id:
@@ -146,7 +165,7 @@ class StripeService:
                 )
                 await self.pago_repo.crear(pago)
             await self.db.commit()
-            return self._a_intencion(venta, pago, client_secret=inten.client_secret), pago_previo is None
+            return self._a_intencion(venta, pago, monto_usd, client_secret=inten.client_secret), pago_previo is None
         except HTTPException:
             await self.db.rollback()
             raise
@@ -162,14 +181,16 @@ class StripeService:
                             detail="Idempotency-Key ya usada con otra solicitud",
                         )
                     venta_fresca = await self.venta_repo.buscarPorId(venta_id)
-                    return self._a_intencion(venta_fresca, pago), False
+                    inten = await gw.obtener_gateway().consultar_intencion(pago.referencia_externa)
+                    monto_usd = await self._validar_intencion_venta(venta_fresca, inten)
+                    return self._a_intencion(venta_fresca, pago, monto_usd, client_secret=inten.client_secret), False
             raise
 
-    def _a_intencion(self, venta: Venta, pago: Pago, client_secret: Optional[str] = None) -> IntencionDTO:
+    def _a_intencion(self, venta: Venta, pago: Pago, monto_usd: Decimal, client_secret: Optional[str] = None) -> IntencionDTO:
         return IntencionDTO(
             payment_intent_id=pago.referencia_externa or "",
-            venta_id=venta.id, monto=venta.total,
-            moneda=settings.STRIPE_CURRENCY or "usd",
+            venta_id=venta.id, monto=monto_usd,
+            moneda="usd",
             estado=pago.estado, client_secret=client_secret,
         )
 
@@ -180,10 +201,48 @@ class StripeService:
                 return p
         return None
 
+    async def _validar_intencion_venta(self, venta: Venta, inten) -> Decimal:
+        """Comprueba el cargo USD y la cotización congelada en Stripe Test."""
+        meta = inten.metadata or {}
+        if inten.venta_id != str(venta.id) or inten.moneda.lower() != "usd":
+            raise HTTPException(status_code=409, detail="La intención no corresponde a la venta o moneda USD")
+        if meta.get("tasa_id"):
+            tasa = await self.db.execute(
+                text("SELECT tasa_bob_por_usd FROM plataforma.tasas_cambio WHERE id = :id"),
+                {"id": uuid.UUID(str(meta["tasa_id"]))},
+            )
+            tasa_val = tasa.scalar_one_or_none()
+            if tasa_val is None or Decimal(str(tasa_val)) <= 0:
+                raise HTTPException(status_code=409, detail="La tasa congelada no existe")
+            esperado = _centavos(Decimal(str(venta.total)) / Decimal(str(tasa_val)))
+            if (str(meta.get("empresa_id")) != str(venta.empresa_id)
+                    or Decimal(str(meta.get("monto_bob", "0"))) != Decimal(str(venta.total))
+                    or int(meta.get("centavos_usd", 0)) != esperado):
+                raise HTTPException(status_code=409, detail="La cotización congelada no coincide con la venta")
+        else:
+            # Intenciones anteriores a la cotización congelada: impedir aprobar
+            # importes BOB enviados erróneamente como USD.
+            esperado = (await TasaCambioService(self.db).cotizar(Decimal(str(venta.total)))).centavos_usd
+        if inten.monto_centavos != esperado:
+            raise HTTPException(status_code=409, detail="El importe Stripe no coincide con el total convertido")
+        return Decimal(esperado) / Decimal("100")
+
     async def estado(self, usuario: Usuario, venta_id: uuid.UUID) -> EstadoPagoDTO:
         venta = await self._venta_digital(venta_id)
         self._autorizar_intencion(usuario, venta)
         pago = await self._pago_stripe_de_venta(venta.id)
+        if pago and pago.estado == "PENDIENTE" and pago.referencia_externa and venta.estado == "PENDIENTE_PAGO":
+            inten = await gw.obtener_gateway().consultar_intencion(pago.referencia_externa)
+            if inten.estado == "SUCCEEDED":
+                await self._validar_intencion_venta(venta, inten)
+                await self._aplicar_aprobado(venta.id, inten.id)
+                await self.db.commit()
+                await self.db.refresh(venta)
+                await self.db.refresh(pago)
+            elif inten.estado == "CANCELED":
+                await self._aplicar_rechazo(venta.id, inten.id, "payment_intent.canceled")
+                await self.db.commit()
+                await self.db.refresh(pago)
         return EstadoPagoDTO(
             venta_id=venta.id,
             estado_venta=venta.estado if isinstance(venta.estado, str) else venta.estado.name,
@@ -326,6 +385,9 @@ class StripeService:
             if (pago.referencia_externa or "") != pi_id:
                 return {"payment_intent": pi_id, "estado": "IGNORADO"}
             if tipo in ("payment_intent.succeeded",):
+                venta_webhook = await self._venta_digital(pago.venta_id)
+                inten_webhook = await gw.obtener_gateway().consultar_intencion(pi_id)
+                await self._validar_intencion_venta(venta_webhook, inten_webhook)
                 await self._aplicar_aprobado(pago.venta_id, pi_id)
                 if evt_id:
                     reg_evt = EventoProveedor(
@@ -572,6 +634,8 @@ class StripeService:
                                     if op.estado != "CAPTURADO":
                                         op.estado = "CAPTURADO"
                                         op.actualizada_en = ahora
+                                elif pago:
+                                    await self._validar_intencion_venta(venta, inten)
                                 if pago and pago.estado != "APROBADO":
                                     pago.estado = "APROBADO"
                                     pago.pagado_en = ahora
@@ -595,6 +659,8 @@ class StripeService:
                                                 if op.estado != "CAPTURADO":
                                                     op.estado = "CAPTURADO"
                                                     op.actualizada_en = ahora
+                                            elif pago:
+                                                await self._validar_intencion_venta(venta, inten_canc)
                                             if pago and pago.estado != "APROBADO":
                                                 pago.estado = "APROBADO"
                                                 pago.pagado_en = ahora
@@ -619,6 +685,8 @@ class StripeService:
                                                 if op.estado != "CAPTURADO":
                                                     op.estado = "CAPTURADO"
                                                     op.actualizada_en = ahora
+                                            elif pago:
+                                                await self._validar_intencion_venta(venta, inten_re)
                                             if pago and pago.estado != "APROBADO":
                                                 pago.estado = "APROBADO"
                                                 pago.pagado_en = ahora

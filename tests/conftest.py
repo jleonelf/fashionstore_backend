@@ -79,7 +79,8 @@ def nombre_base_efectiva() -> str:
 
 
 def es_base_de_pruebas(nombre: str) -> bool:
-    return (nombre or "").strip().endswith("_test")
+    nombre = (nombre or "").strip()
+    return nombre.endswith("_test") and nombre != "fashionstore_manual_test"
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -96,7 +97,8 @@ def _proteger_base_productiva():
     if not es_base_de_pruebas(nombre):
         pytest.fail(
             "Protección Ciclo 2: la suite crea datos destructivos y la base "
-            f"EFECTIVA es '{nombre}' (URL real de SQLAlchemy). Configure una "
+            f"EFECTIVA es '{nombre}' (URL real de SQLAlchemy). "
+            "fashionstore_manual_test contiene la demo interactiva y no puede limpiarse. Configure una "
             "base separada cuyo nombre termine en '_test' (ver "
             "tests/BASE_DE_PRUEBAS.md) con POSTGRES_DB=fashionstore_test o "
             "DATABASE_URL=.../fashionstore_test (alias TEST_DATABASE_URL / "
